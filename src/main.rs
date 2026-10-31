@@ -12,7 +12,7 @@ struct Sticky {
 }
 
 impl Sticky {
-    fn save(&self) {
+    fn write_note(&self) {
         if let Some(dir) = self.path.parent() {
             let _ = fs::create_dir_all(dir);
         }
@@ -49,7 +49,7 @@ impl eframe::App for Sticky {
                             self.focused = true;
                         }
                         if resp.changed() {
-                            self.save();
+                            self.write_note();
                         }
                     });
             });
