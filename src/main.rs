@@ -6,10 +6,12 @@ use std::{
 };
 
 const APP_ID: &str = "hyprsticky";
+/// Notes are markdown files, so tools like Obsidian can open them.
+const EXT: &str = "md";
 const PAPER: egui::Color32 = egui::Color32::from_rgb(255, 241, 118);
 const INK: egui::Color32 = egui::Color32::from_rgb(45, 40, 20);
 
-/// One window = one note, stored as a plain text file.
+/// One window = one note, stored as a markdown file.
 struct Sticky {
     path: PathBuf,
     text: String,
@@ -66,8 +68,12 @@ impl eframe::App for Sticky {
     }
 }
 
-/// ~/.local/share/hyprsticky (respects XDG_DATA_HOME).
+/// Where notes live: $HYPRSTICKY_DIR if set (e.g. a folder inside an Obsidian vault),
+/// otherwise ~/.local/share/hyprsticky (respects XDG_DATA_HOME).
 fn notes_dir() -> PathBuf {
+    if let Some(dir) = env::var_os("HYPRSTICKY_DIR").filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir);
+    }
     env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
@@ -94,7 +100,7 @@ fn new_note_id(dir: &Path) -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    while dir.join(format!("{n}.txt")).exists() {
+    while dir.join(format!("{n}.{EXT}")).exists() {
         n += 1;
     }
     n.to_string()
@@ -106,7 +112,7 @@ fn list_notes(dir: &Path) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+            if path.extension().and_then(|e| e.to_str()) != Some(EXT) {
                 continue;
             }
             let id = path
@@ -148,7 +154,7 @@ fn main() -> eframe::Result {
         Some(name) => sanitize(&name),
         None => new_note_id(&dir),
     };
-    let path = dir.join(format!("{id}.txt"));
+    let path = dir.join(format!("{id}.{EXT}"));
     let text = fs::read_to_string(&path).unwrap_or_default();
 
     let options = eframe::NativeOptions {

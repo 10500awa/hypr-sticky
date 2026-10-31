@@ -2,10 +2,13 @@
 
 Minimal sticky notes for the Hyprland window manager, written in Rust.
 
-Every time you launch it you get a **new, empty note**. Each note is a plain text file in
+Every time you launch it you get a **new, empty note**. Each note is a markdown (`.md`) file in
 `~/.local/share/hyprsticky/` (or `$XDG_DATA_HOME/hyprsticky/`), saved on every keystroke.
 A note you never type in leaves no file behind. Built on egui/eframe with the Wayland +
 OpenGL backends only: no GTK, no X11.
+
+Because notes are plain markdown files, you can browse and organize them with Obsidian or
+any other markdown tool (see [Obsidian](#obsidian)).
 
 ## Build
 
@@ -25,6 +28,26 @@ hyprsticky todo         # open (or create) a note with a name you choose
 
 `Ctrl+W` closes a note. Nothing is lost, since it saves as you type.
 If you delete all the text in a note, its file is removed.
+
+## Obsidian
+
+Two ways to use your notes in Obsidian:
+
+- Open the notes folder as a vault: in Obsidian choose "Open folder as vault" and pick
+  `~/.local/share/hyprsticky/`.
+- Or store notes inside a vault you already have by setting `HYPRSTICKY_DIR` to a folder in it
+  (use an absolute path):
+
+  ```sh
+  export HYPRSTICKY_DIR="$HOME/Documents/MyVault/Stickies"
+  ```
+
+  For notes launched from Hyprland keybinds, set it in your Hyprland config's env section
+  (`env = HYPRSTICKY_DIR,/home/you/Documents/MyVault/Stickies`) so every launch sees it.
+
+Notes are named by their creation time in milliseconds (e.g. `1730372000000.md`). You can rename
+them in Obsidian. To reopen a note with `hyprsticky <name>` (file name without `.md`), keep the
+name to letters, numbers, `-` and `_`.
 
 ## Hyprland config
 
