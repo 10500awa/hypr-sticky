@@ -1,5 +1,5 @@
 [package]
-name = "hypr-sticky"
+name = "hyprsticky"
 version = "0.1.0"
 edition = "2024"
 description = "Minimal sticky notes for Hyprland"

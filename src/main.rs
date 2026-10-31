@@ -1,6 +1,11 @@
 use eframe::egui;
-use std::{env, fs, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
+const APP_ID: &str = "hyprsticky";
 const PAPER: egui::Color32 = egui::Color32::from_rgb(255, 241, 118);
 const INK: egui::Color32 = egui::Color32::from_rgb(45, 40, 20);
 
@@ -12,12 +17,17 @@ struct Sticky {
 }
 
 impl Sticky {
+    /// Saves the note. An empty note leaves no file behind.
     fn write_note(&self) {
+        if self.text.is_empty() {
+            let _ = fs::remove_file(&self.path);
+            return;
+        }
         if let Some(dir) = self.path.parent() {
             let _ = fs::create_dir_all(dir);
         }
         if let Err(e) = fs::write(&self.path, &self.text) {
-            eprintln!("hypr-sticky: could not save {}: {e}", self.path.display());
+            eprintln!("{APP_ID}: could not save {}: {e}", self.path.display());
         }
     }
 }
@@ -56,14 +66,18 @@ impl eframe::App for Sticky {
     }
 }
 
-/// ~/.local/share/hypr-sticky/<name>.txt (respects XDG_DATA_HOME).
-fn note_path(name: &str) -> PathBuf {
-    let base = env::var_os("XDG_DATA_HOME")
+/// ~/.local/share/hyprsticky (respects XDG_DATA_HOME).
+fn notes_dir() -> PathBuf {
+    env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .unwrap_or_else(|| PathBuf::from("."));
-    let safe: String = name
-        .chars()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(APP_ID)
+}
+
+/// Keeps note names safe to use as file names.
+fn sanitize(name: &str) -> String {
+    name.chars()
         .map(|c| {
             if c.is_alphanumeric() || c == '-' || c == '_' {
                 c
@@ -71,26 +85,83 @@ fn note_path(name: &str) -> PathBuf {
                 '_'
             }
         })
-        .collect();
-    base.join("hypr-sticky").join(format!("{safe}.txt"))
+        .collect()
+}
+
+/// A fresh id for a new note: the current time in milliseconds.
+fn new_note_id(dir: &Path) -> String {
+    let mut n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    while dir.join(format!("{n}.txt")).exists() {
+        n += 1;
+    }
+    n.to_string()
+}
+
+/// Prints saved notes, newest first: id, then the first line.
+fn list_notes(dir: &Path) {
+    let mut notes = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+                continue;
+            }
+            let id = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let first_line: String = fs::read_to_string(&path)
+                .unwrap_or_default()
+                .lines()
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(60)
+                .collect();
+            let modified = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(UNIX_EPOCH);
+            notes.push((modified, id, first_line));
+        }
+    }
+    notes.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, id, first_line) in notes {
+        println!("{id}\t{first_line}");
+    }
 }
 
 fn main() -> eframe::Result {
-    let name = env::args().nth(1).unwrap_or_else(|| "note".to_string());
-    let path = note_path(&name);
+    let dir = notes_dir();
+    let arg = env::args().nth(1);
+
+    if matches!(arg.as_deref(), Some("list" | "--list" | "-l")) {
+        list_notes(&dir);
+        return Ok(());
+    }
+
+    // No argument: a brand-new, empty note. With an id/name: open (or create) that note.
+    let id = match arg {
+        Some(name) => sanitize(&name),
+        None => new_note_id(&dir),
+    };
+    let path = dir.join(format!("{id}.txt"));
     let text = fs::read_to_string(&path).unwrap_or_default();
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_app_id("hypr-sticky")
-            .with_title(format!("hypr-sticky: {name}"))
+            .with_app_id(APP_ID)
+            .with_title(format!("{APP_ID}: {id}"))
             .with_inner_size([260.0, 260.0])
             .with_decorations(false),
         ..Default::default()
     };
 
     eframe::run_native(
-        "hypr-sticky",
+        APP_ID,
         options,
         Box::new(move |cc| {
             cc.egui_ctx.set_visuals(egui::Visuals::light());
