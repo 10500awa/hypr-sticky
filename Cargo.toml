@@ -1,0 +1,16 @@
+[package]
+name = "hypr-sticky"
+version = "0.1.0"
+edition = "2024"
+description = "Minimal sticky notes for Hyprland"
+license = "MIT"
+
+[dependencies]
+# Wayland + OpenGL only: no X11, no GTK, no layer-shell.
+eframe = { version = "0.32", default-features = false, features = ["default_fonts", "glow", "wayland"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
