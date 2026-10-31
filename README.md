@@ -29,19 +29,17 @@ Notes are normal windows, so let Hyprland float and pin them.
 Hyprland 0.53 and newer:
 
 ```ini
-windowrule = float on, match:class ^(hypr-sticky)$
-windowrule = pin on,   match:class ^(hypr-sticky)$
-windowrule = size 260 260, match:class ^(hypr-sticky)$
+hl.window_rule({
+  name = "hypr-sticky",
+  float = true,
+  pin = true,
+  size = "260 260",
+  match = {
+    class = "hypr-sticky"
+  }
+})
+
 ```
-
-Older versions:
-
-```ini
-windowrulev2 = float, class:^(hypr-sticky)$
-windowrulev2 = pin,   class:^(hypr-sticky)$
-windowrulev2 = size 260 260, class:^(hypr-sticky)$
-```
-
 Keybinds and autostart (notes have no title bar, so move and resize them with the mouse):
 
 ```ini
