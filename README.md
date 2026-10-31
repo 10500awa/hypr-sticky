@@ -22,11 +22,11 @@ cargo install --path .        # installs to ~/.cargo/bin
 ```sh
 hyprsticky              # a new, empty note
 hyprsticky list         # saved notes, newest first (id, then first line)
-hyprsticky 1730372000000   # reopen a saved note by its id
+hyprsticky "Buy milk"   # reopen a saved note by its name (the file name without .md)
 hyprsticky todo         # open (or create) a note with a name you choose
 ```
 
-`Ctrl+W` closes a note. Nothing is lost, since it saves as you type.
+`Esc` closes a note. Nothing is lost, since it saves as you type.
 If you delete all the text in a note, its file is removed.
 
 ## Obsidian
@@ -45,9 +45,14 @@ Two ways to use your notes in Obsidian:
   For notes launched from Hyprland keybinds, set it in your Hyprland config's env section
   (`env = HYPRSTICKY_DIR,/home/you/Documents/MyVault/Stickies`) so every launch sees it.
 
-Notes are named by their creation time in milliseconds (e.g. `1730372000000.md`). You can rename
-them in Obsidian. To reopen a note with `hyprsticky <name>` (file name without `.md`), keep the
-name to letters, numbers, `-` and `_`.
+While you type, a new note is saved under its creation time in milliseconds (e.g.
+`1730372000000.md`). When you close it, it is renamed after its first line (e.g. `Buy milk.md`),
+so Obsidian shows a readable title. If that name is already taken, a number is added (`Buy milk 2.md`).
+Characters that are invalid in file names or break Obsidian links (`/ \ : * ? " < > | # ^ [ ]`)
+are dropped, and long titles are cut to 60 characters.
+
+Notes you named yourself (`hyprsticky todo`) keep their name. You can also rename notes freely
+in Obsidian.
 
 ## Hyprland config
 

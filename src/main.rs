@@ -32,13 +32,55 @@ impl Sticky {
             eprintln!("{APP_ID}: could not save {}: {e}", self.path.display());
         }
     }
+
+    /// Called when the note closes. A note that still has its timestamp name is renamed after
+    /// its first line (e.g. "Buy milk.md"). Notes with any other name are left alone, and an
+    /// existing note is never overwritten.
+    fn rename_to_title(&mut self) {
+        let is_timestamp_name = self
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()));
+        if self.text.is_empty() || !is_timestamp_name || !self.path.exists() {
+            return;
+        }
+        let Some(dir) = self.path.parent().map(Path::to_path_buf) else {
+            return;
+        };
+
+        let first_line = self
+            .text
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("");
+        let title: String = clean_name(first_line).chars().take(60).collect();
+        let title = clean_name(&title);
+        if title.is_empty() {
+            return;
+        }
+
+        let mut target = dir.join(format!("{title}.{EXT}"));
+        let mut n = 2;
+        while target.exists() {
+            target = dir.join(format!("{title} {n}.{EXT}"));
+            n += 1;
+        }
+        if fs::rename(&self.path, &target).is_ok() {
+            self.path = target;
+        }
+    }
 }
 
 impl eframe::App for Sticky {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Ctrl+W closes the note (it is already saved).
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::W)) {
+        // Escape closes the note (it is already saved).
+        let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        if escape {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if escape || ctx.input(|i| i.viewport().close_requested()) {
+            self.rename_to_title();
         }
 
         egui::CentralPanel::default()
@@ -81,17 +123,15 @@ fn notes_dir() -> PathBuf {
         .join(APP_ID)
 }
 
-/// Keeps note names safe to use as file names.
-fn sanitize(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
+/// Turns text into a safe file name: drops characters that are invalid in file names or break
+/// Obsidian links, collapses whitespace, and trims leading/trailing dots and spaces.
+fn clean_name(s: &str) -> String {
+    let kept: String = s
+        .chars()
+        .filter(|c| !c.is_control() && !"\\/:*?\"<>|#^[]".contains(*c))
+        .collect();
+    let joined = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+    joined.trim_matches('.').trim().to_string()
 }
 
 /// A fresh id for a new note: the current time in milliseconds.
@@ -150,8 +190,8 @@ fn main() -> eframe::Result {
     }
 
     // No argument: a brand-new, empty note. With an id/name: open (or create) that note.
-    let id = match arg {
-        Some(name) => sanitize(&name),
+    let id = match arg.map(|n| clean_name(&n)).filter(|n| !n.is_empty()) {
+        Some(name) => name,
         None => new_note_id(&dir),
     };
     let path = dir.join(format!("{id}.{EXT}"));
