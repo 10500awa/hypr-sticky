@@ -43,11 +43,12 @@ hl.window_rule({
 Keybinds and autostart (notes have no title bar, so move and resize them with the mouse):
 
 ```ini
-bind   = SUPER SHIFT, N, exec, hypr-sticky
-bind   = SUPER SHIFT, T, exec, hypr-sticky todo
-bindm  = SUPER, mouse:272, movewindow
-bindm  = SUPER, mouse:273, resizewindow
-exec-once = hypr-sticky todo
+
+hl.bind(mod .. " + SHIFT + N", hl.dsp.exec_cmd("hypr-sticky"))
+hl.bind(mod .. " + SHIFT + T", hl.dsp.exec_cmd("hypr-sticky todo"))
+hl.bindm(mod + " + mouse:272", hl.dsp.window.move())
+hl.bindm(mod + " + mouse:273", hl.dsp.window.resize())
+hl.exec_once("hypr-sticky todo")
 ```
 
 ## License
