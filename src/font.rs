@@ -9,6 +9,15 @@
 //!   it is looked up and loaded on demand.
 
 use crate::md::Style;
+use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+use memmap2::Mmap;
+use std::{
+    collections::HashMap,
+    fs::File,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
 /// Used when fontconfig is not available.
 const FALLBACK_FILES: &[&str] = &[
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
