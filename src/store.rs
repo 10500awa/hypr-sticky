@@ -81,9 +81,9 @@ pub fn rename_to_title(path: &Path, text: &str) -> Option<PathBuf> {
     }
     let dir = path.parent()?;
 
-    let first_line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-    let title: String = clean_name(first_line).chars().take(60).collect();
-    let title = clean_name(&title);
+    let first_line = text.lines().find(|l| !l.trim().is_empty())?;
+    let raw: String = clean_name(first_line).chars().take(60).collect();
+    let title = raw.trim_end_matches(['.', ' ']);
     if title.is_empty() {
         return None;
     }

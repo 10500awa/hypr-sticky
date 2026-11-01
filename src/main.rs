@@ -334,20 +334,14 @@ impl App {
 
     fn next_timeout(&self) -> Option<Duration> {
         let now = Instant::now();
-        let mut soonest: Option<Duration> = None;
-        let mut consider = |at: Instant| {
-            let d = at.saturating_duration_since(now);
-            soonest = Some(soonest.map_or(d, |s| s.min(d)));
-        };
-        if let (Some(r), Some(_)) = (&self.repeat, self.repeat_interval) {
-            consider(r.next);
-        }
-        if let Some(at) = self.save_deadline() {
-            consider(at);
-        }
-        soonest
+        let repeat_at = self.repeat.as_ref().zip(self.repeat_interval).map(|(r, _)| r.next);
+        [repeat_at, self.save_deadline()]
+            .into_iter()
+            .flatten()
+            .map(|at| at.saturating_duration_since(now))
+            .min()
     }
-
+    
     fn tick(&mut self) {
         let now = Instant::now();
         let due = match (&mut self.repeat, self.repeat_interval) {
@@ -541,14 +535,11 @@ impl App {
             self.goal_x = None;
         }
         if self.editor.version() != v0 {
-            let now = Instant::now();
-            self.dirty_since.get_or_insert(now);
-            self.last_edit = now;
-            self.relayout();
+            self.after_edit();
+        } else {
+            self.ensure_cursor_visible();
+            self.needs_draw = true;
         }
-        self.ensure_cursor_visible();
-        self.needs_draw = true;
-    }
 
     // ---- mouse ----
 

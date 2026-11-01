@@ -80,12 +80,8 @@ fn fc_match(pattern: &str) -> Option<(PathBuf, u32)> {
 /// Memory-maps a font file. The mapping is kept for the life of the process.
 fn load_face(path: &Path, index: u32) -> Option<FontRef<'static>> {
     let file = File::open(path).ok()?;
-    // SAFETY: the mapping is read-only; a font file changing underneath us could only
-    // produce garbled glyphs, as with any application that reads font files.
     let map = unsafe { Mmap::map(&file) }.ok()?;
-    let map: &'static Mmap = Box::leak(Box::new(map));
-    let data: &'static [u8] = &map[..];
-    FontRef::try_from_slice_and_index(data, index).ok()
+    FontRef::try_from_slice_and_index(Box::leak(Box::new(map)), index).ok()
 }
 
 /// Scale such that one em is `em_px` pixels. (ab_glyph's PxScale is the ascent+descent height.)
@@ -237,10 +233,7 @@ impl Fonts {
         }
         let mut cov = vec![0u8; (w * h) as usize];
         outlined.draw(|x, y, v| {
-            let idx = (y * w + x) as usize;
-            if x < w && idx < cov.len() {
-                cov[idx] = (v.clamp(0.0, 1.0) * 255.0) as u8;
-            }
+            cov[(y * w + x) as usize] = (v.clamp(0.0, 1.0) * 255.0) as u8;
         });
         Some(Bitmap {
             left: bounds.min.x.floor() as i32,
