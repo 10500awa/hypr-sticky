@@ -151,15 +151,16 @@ impl Layout {
         self.lines[l].start + self.max_col(l)
     }
 
-    /// Cursor position one line up, keeping the horizontal position `goal_x`.
-    pub fn up(&self, idx: usize, goal_x: f32) -> usize {
-        let l = self.locate(idx).0;
-        if l == 0 { 0 } else { self.idx_at(l - 1, goal_x) }
-    }
-
-    /// Cursor position one line down, keeping the horizontal position `goal_x`.
-    pub fn down(&self, idx: usize, goal_x: f32) -> usize {
-        let l = self.locate(idx).0;
-        if l + 1 >= self.lines.len() { self.text_end() } else { self.idx_at(l + 1, goal_x) }
+    /// Cursor position `steps` lines down (negative: up), keeping the horizontal position
+    /// `goal_x`. Going past either end gives the start or the end of the text.
+    pub fn vertical(&self, idx: usize, steps: i32, goal_x: f32) -> usize {
+        let l = self.locate(idx).0 as i32 + steps;
+        if l < 0 {
+            0
+        } else if l as usize >= self.lines.len() {
+            self.text_end()
+        } else {
+            self.idx_at(l as usize, goal_x)
+        }
     }
 }

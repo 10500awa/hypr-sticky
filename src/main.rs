@@ -213,7 +213,6 @@ struct App {
     configured: bool,
     needs_draw: bool,
     exit: bool,
-    finished: bool,
 
     // The note.
     path: std::path::PathBuf,
@@ -285,9 +284,6 @@ impl App {
 
     /// Saves and names the note after its first line. Safe to call more than once.
     fn finish(&mut self) {
-        if std::mem::replace(&mut self.finished, true) {
-            return;
-        }
         // Text the input method has not committed yet is dropped, not saved.
         self.clear_composition();
         if self.dirty_since.is_some() {
@@ -365,10 +361,7 @@ impl App {
     /// Moves the cursor `steps` visual lines (negative = up), keeping the horizontal position.
     fn vertical(&mut self, steps: i32, extend: bool) {
         let gx = *self.goal_x.get_or_insert_with(|| self.layout.x_of(self.editor.cursor()));
-        let mut idx = self.editor.cursor();
-        for _ in 0..steps.unsigned_abs() {
-            idx = if steps < 0 { self.layout.up(idx, gx) } else { self.layout.down(idx, gx) };
-        }
+        let idx = self.layout.vertical(self.editor.cursor(), steps, gx);
         self.editor.set_cursor(idx, extend);
     }
 
@@ -397,11 +390,8 @@ impl App {
                 self.editor.set_cursor(i, shift);
             }
             Keysym::End => {
-                let i = if ctrl {
-                    self.editor.len()
-                } else {
-                    self.layout.line_end_idx(self.editor.cursor())
-                };
+                let i =
+                    if ctrl { usize::MAX } else { self.layout.line_end_idx(self.editor.cursor()) };
                 self.editor.set_cursor(i, shift);
             }
             Keysym::BackSpace => self.editor.backspace(ctrl),
@@ -409,7 +399,7 @@ impl App {
             Keysym::Return | Keysym::KP_Enter => self.editor.insert("\n"),
             Keysym::Tab => self.editor.insert("\t"),
             sym if ctrl && !alt => match sym.key_char().map(|c| c.to_ascii_lowercase()) {
-                Some('a') => self.editor.select_all(),
+                Some('a') => self.editor.select_range(0, usize::MAX),
                 Some('z') if !shift => self.editor.undo(),
                 Some('z' | 'y') => self.editor.redo(),
                 _ => {}
@@ -513,6 +503,13 @@ impl App {
     }
 }
 
+/// Declares trait methods that ignore their arguments: `name(argument types);`.
+macro_rules! ignore {
+    ($($name:ident($($ty:ty),*);)*) => {
+        $(fn $name(&mut self, _: &Connection, _: &QueueHandle<Self>, $(_: $ty),*) {})*
+    };
+}
+
 impl CompositorHandler for App {
     fn scale_factor_changed(
         &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface,
@@ -521,28 +518,11 @@ impl CompositorHandler for App {
         self.set_scale(new_factor);
     }
 
-    fn transform_changed(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface,
-        _new_transform: wl_output::Transform,
-    ) {
-    }
-
-    fn frame(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface,
-        _time: u32,
-    ) {
-    }
-
-    fn surface_enter(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface,
-        _output: &wl_output::WlOutput,
-    ) {
-    }
-
-    fn surface_leave(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface,
-        _output: &wl_output::WlOutput,
-    ) {
+    ignore! {
+        transform_changed(&wl_surface::WlSurface, wl_output::Transform);
+        frame(&wl_surface::WlSurface, u32);
+        surface_enter(&wl_surface::WlSurface, &wl_output::WlOutput);
+        surface_leave(&wl_surface::WlSurface, &wl_output::WlOutput);
     }
 }
 
@@ -551,19 +531,10 @@ impl OutputHandler for App {
         &mut self.output_state
     }
 
-    fn new_output(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput,
-    ) {
-    }
-
-    fn update_output(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput,
-    ) {
-    }
-
-    fn output_destroyed(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput,
-    ) {
+    ignore! {
+        new_output(wl_output::WlOutput);
+        update_output(wl_output::WlOutput);
+        output_destroyed(wl_output::WlOutput);
     }
 }
 
@@ -595,7 +566,10 @@ impl SeatHandler for App {
         &mut self.seat_state
     }
 
-    fn new_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat) {}
+    ignore! {
+        new_seat(wl_seat::WlSeat);
+        remove_seat(wl_seat::WlSeat);
+    }
 
     fn new_capability(
         &mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat,
@@ -634,17 +608,11 @@ impl SeatHandler for App {
             }
         }
     }
-
-    fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat) {
-    }
 }
 
 impl KeyboardHandler for App {
-    fn enter(
-        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
-        _keyboard: &wl_keyboard::WlKeyboard, _surface: &wl_surface::WlSurface, _serial: u32,
-        _raw: &[u32], _keysyms: &[Keysym],
-    ) {
+    ignore! {
+        enter(&wl_keyboard::WlKeyboard, &wl_surface::WlSurface, u32, &[u32], &[Keysym]);
     }
 
     fn leave(
@@ -825,7 +793,7 @@ fn main() {
     let id = arg.map(|n| store::clean_name(&n)).filter(|n| !n.is_empty());
     let id = id.unwrap_or_else(|| store::new_note_id(&dir));
     let path = store::note_path(&dir, &id);
-    let mut editor = Editor::new(&store::read_note(&path));
+    let mut editor = Editor::new(&std::fs::read_to_string(&path).unwrap_or_default());
     editor.set_cursor(usize::MAX, false);
 
     let font_spec = std::env::var("HYPRSTICKY_FONT").unwrap_or_default();
@@ -875,7 +843,6 @@ fn main() {
         configured: false,
         needs_draw: false,
         exit: false,
-        finished: false,
         path,
         editor,
         layout: Layout::default(),

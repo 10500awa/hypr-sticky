@@ -45,10 +45,6 @@ pub fn note_path(dir: &Path, id: &str) -> PathBuf {
     dir.join(format!("{id}.{EXT}"))
 }
 
-pub fn read_note(path: &Path) -> String {
-    fs::read_to_string(path).unwrap_or_default()
-}
-
 /// Saves the note. An empty note leaves no file behind.
 pub fn write_note(path: &Path, text: &str) {
     if text.is_empty() {
@@ -104,7 +100,7 @@ pub fn list_notes(dir: &Path) {
         .collect();
     notes.sort_by(|a, b| b.cmp(a));
     for (_, path) in notes {
-        let text = read_note(&path);
+        let text = fs::read_to_string(&path).unwrap_or_default();
         let first_line: String = text.lines().next().unwrap_or("").chars().take(60).collect();
         println!("{}\t{first_line}", path.file_stem().unwrap_or_default().to_string_lossy());
     }

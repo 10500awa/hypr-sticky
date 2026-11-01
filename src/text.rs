@@ -110,10 +110,6 @@ impl Editor {
         &self.chars
     }
 
-    pub fn len(&self) -> usize {
-        self.chars.len()
-    }
-
     pub fn cursor(&self) -> usize {
         self.cursor
     }
@@ -264,10 +260,6 @@ impl Editor {
             _ if word => self.set_cursor(next_word(&self.chars, self.cursor), extend),
             _ => self.set_cursor(self.cursor + 1, extend),
         }
-    }
-
-    pub fn select_all(&mut self) {
-        self.select_range(0, self.chars.len());
     }
 
     pub fn select_range(&mut self, a: usize, b: usize) {
