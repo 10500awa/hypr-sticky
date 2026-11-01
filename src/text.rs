@@ -5,12 +5,8 @@
 
 const MAX_UNDO: usize = 200;
 
-#[derive(Clone)]
-struct Snapshot {
-    chars: Vec<char>,
-    cursor: usize,
-    anchor: usize,
-}
+/// A saved state: (text, cursor, anchor).
+type Snapshot = (Vec<char>, usize, usize);
 
 /// What kind of edit happened last; consecutive edits of the same kind share one undo step.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -21,6 +17,7 @@ enum Kind {
     Other,
 }
 
+#[derive(Default)]
 pub struct Editor {
     chars: Vec<char>,
     cursor: usize,
@@ -31,7 +28,7 @@ pub struct Editor {
     version: u64,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq)]
 enum Class {
     Space,
     Word,
@@ -49,7 +46,7 @@ fn class(c: char) -> Class {
 }
 
 /// Start of the word before `idx` (Ctrl+Left).
-pub fn prev_word(chars: &[char], idx: usize) -> usize {
+fn prev_word(chars: &[char], idx: usize) -> usize {
     let mut i = idx.min(chars.len());
     while i > 0 && class(chars[i - 1]) == Class::Space {
         i -= 1;
@@ -64,15 +61,13 @@ pub fn prev_word(chars: &[char], idx: usize) -> usize {
 }
 
 /// Start of the word after `idx` (Ctrl+Right).
-pub fn next_word(chars: &[char], idx: usize) -> usize {
+fn next_word(chars: &[char], idx: usize) -> usize {
     let n = chars.len();
     let mut i = idx.min(n);
-    if i < n {
+    if i < n && class(chars[i]) != Class::Space {
         let cl = class(chars[i]);
-        if cl != Class::Space {
-            while i < n && class(chars[i]) == cl {
-                i += 1;
-            }
+        while i < n && class(chars[i]) == cl {
+            i += 1;
         }
     }
     while i < n && class(chars[i]) == Class::Space {
@@ -88,14 +83,8 @@ pub fn word_range(chars: &[char], idx: usize) -> (usize, usize) {
     }
     let i = idx.min(chars.len() - 1);
     let cl = class(chars[i]);
-    let mut a = i;
-    while a > 0 && class(chars[a - 1]) == cl {
-        a -= 1;
-    }
-    let mut b = i + 1;
-    while b < chars.len() && class(chars[b]) == cl {
-        b += 1;
-    }
+    let a = chars[..i].iter().rposition(|&c| class(c) != cl).map_or(0, |p| p + 1);
+    let b = chars[i..].iter().position(|&c| class(c) != cl).map_or(chars.len(), |p| i + p);
     (a, b)
 }
 
@@ -109,22 +98,12 @@ pub fn line_range(chars: &[char], idx: usize) -> (usize, usize) {
 
 /// Keeps newlines, tabs and printable characters; drops other control characters and `\r`.
 fn clean(s: &str) -> Vec<char> {
-    s.chars()
-        .filter(|&c| c == '\n' || c == '\t' || !c.is_control())
-        .collect()
+    s.chars().filter(|&c| c == '\n' || c == '\t' || !c.is_control()).collect()
 }
 
 impl Editor {
     pub fn new(text: &str) -> Editor {
-        Editor {
-            chars: clean(text),
-            cursor: 0,
-            anchor: 0,
-            undo: Vec::new(),
-            redo: Vec::new(),
-            last: None,
-            version: 0,
-        }
+        Editor { chars: clean(text), ..Default::default() }
     }
 
     pub fn chars(&self) -> &[char] {
@@ -148,33 +127,21 @@ impl Editor {
         self.chars.iter().collect()
     }
 
+    /// The selection as (start, end); empty (start == end) when nothing is selected.
+    fn span(&self) -> (usize, usize) {
+        (self.anchor.min(self.cursor), self.anchor.max(self.cursor))
+    }
+
     /// The selected range as (start, end), if any.
     pub fn selection(&self) -> Option<(usize, usize)> {
-        (self.anchor != self.cursor)
-            .then(|| (self.anchor.min(self.cursor), self.anchor.max(self.cursor)))
-    }
-
-    fn snapshot(&self) -> Snapshot {
-        Snapshot {
-            chars: self.chars.clone(),
-            cursor: self.cursor,
-            anchor: self.anchor,
-        }
-    }
-
-    fn restore(&mut self, s: Snapshot) {
-        self.chars = s.chars;
-        self.cursor = s.cursor.min(self.chars.len());
-        self.anchor = s.anchor.min(self.chars.len());
-        self.version += 1;
-        self.last = None;
+        Some(self.span()).filter(|(a, b)| a != b)
     }
 
     /// Call before changing the text: records an undo step unless this edit continues the
     /// previous one.
     fn checkpoint(&mut self, kind: Kind, force_new: bool) {
         if force_new || kind == Kind::Other || self.last != Some(kind) {
-            self.undo.push(self.snapshot());
+            self.undo.push((self.chars.clone(), self.cursor, self.anchor));
             if self.undo.len() > MAX_UNDO {
                 self.undo.remove(0);
             }
@@ -183,29 +150,31 @@ impl Editor {
         self.last = Some(kind);
     }
 
-    fn remove_range(&mut self, a: usize, b: usize) {
-        self.chars.drain(a..b);
-        self.cursor = a;
-        self.anchor = a;
+    /// Replaces `a..b` with `new` and puts the cursor after it.
+    fn replace(&mut self, a: usize, b: usize, new: &[char]) {
+        self.chars.splice(a..b, new.iter().copied());
+        self.cursor = a + new.len();
+        self.anchor = self.cursor;
         self.version += 1;
     }
 
-    pub fn undo(&mut self) -> bool {
-        let Some(s) = self.undo.pop() else {
-            return false;
-        };
-        self.redo.push(self.snapshot());
-        self.restore(s);
-        true
+    /// Moves one step through the history: back (`undo`) or forward.
+    fn travel(&mut self, undo: bool) {
+        let (from, to) =
+            if undo { (&mut self.undo, &mut self.redo) } else { (&mut self.redo, &mut self.undo) };
+        let Some((chars, cursor, anchor)) = from.pop() else { return };
+        to.push((std::mem::replace(&mut self.chars, chars), self.cursor, self.anchor));
+        (self.cursor, self.anchor) = (cursor, anchor);
+        self.version += 1;
+        self.last = None;
     }
 
-    pub fn redo(&mut self) -> bool {
-        let Some(s) = self.redo.pop() else {
-            return false;
-        };
-        self.undo.push(self.snapshot());
-        self.restore(s);
-        true
+    pub fn undo(&mut self) {
+        self.travel(true);
+    }
+
+    pub fn redo(&mut self) {
+        self.travel(false);
     }
 
     /// Types text at the cursor, replacing the selection if there is one.
@@ -214,70 +183,60 @@ impl Editor {
         if new.is_empty() {
             return;
         }
-        let selection = self.selection();
+        let (a, b) = self.span();
         // Start a new undo step at the start of each word, at newlines and when replacing.
         let after_space = self.cursor > 0 && self.chars[self.cursor - 1].is_whitespace();
-        let force_new =
-            selection.is_some() || new.contains(&'\n') || (after_space && !new[0].is_whitespace());
+        let force_new = a != b || new.contains(&'\n') || (after_space && !new[0].is_whitespace());
         self.checkpoint(Kind::Insert, force_new);
-        if let Some((a, b)) = selection {
-            self.remove_range(a, b);
-        }
-        let at = self.cursor;
-        let n = new.len();
-        self.chars.splice(at..at, new);
-        self.cursor = at + n;
-        self.anchor = self.cursor;
-        self.version += 1;
+        self.replace(a, b, &new);
     }
 
-    fn delete_selection(&mut self) -> bool {
-        let Some((a, b)) = self.selection() else {
-            return false;
+    /// Input-method update: replaces the `old` chars before the cursor (the previous
+    /// composition) with `commit` followed by `preedit`, the new composition. A whole
+    /// composition is one undo step. Returns how many chars of `preedit` were inserted.
+    pub fn compose(&mut self, old: usize, commit: &str, preedit: &str) -> usize {
+        let (mut new, preedit) = (clean(commit), clean(preedit));
+        if old == 0 && new.is_empty() && preedit.is_empty() {
+            return 0;
+        }
+        new.extend_from_slice(&preedit);
+        let (a, b) = if old == 0 {
+            self.checkpoint(Kind::Other, true);
+            self.span()
+        } else {
+            (self.cursor.saturating_sub(old), self.cursor)
         };
-        self.checkpoint(Kind::Other, true);
-        self.remove_range(a, b);
-        true
+        self.replace(a, b, &new);
+        preedit.len()
     }
 
-    pub fn backspace(&mut self) {
-        if self.delete_selection() || self.cursor == 0 {
-            return;
+    fn erase(&mut self, a: usize, b: usize, kind: Kind) {
+        if a < b {
+            self.checkpoint(kind, false);
+            self.replace(a, b, &[]);
         }
-        self.checkpoint(Kind::Backspace, false);
-        self.remove_range(self.cursor - 1, self.cursor);
     }
 
-    pub fn delete_forward(&mut self) {
-        if self.delete_selection() || self.cursor >= self.chars.len() {
-            return;
-        }
-        self.checkpoint(Kind::Delete, false);
+    /// Deletes the selection, or else the char (with `word`: the word) before the cursor.
+    pub fn backspace(&mut self, word: bool) {
         let c = self.cursor;
-        self.remove_range(c, c + 1);
+        let (a, b, kind) = match self.selection() {
+            Some((a, b)) => (a, b, Kind::Other),
+            None if word => (prev_word(&self.chars, c), c, Kind::Other),
+            None => (c.saturating_sub(1), c, Kind::Backspace),
+        };
+        self.erase(a, b, kind);
     }
 
-    pub fn backspace_word(&mut self) {
-        if self.delete_selection() {
-            return;
-        }
-        let a = prev_word(&self.chars, self.cursor);
-        if a < self.cursor {
-            self.checkpoint(Kind::Other, true);
-            self.remove_range(a, self.cursor);
-        }
-    }
-
-    pub fn delete_word(&mut self) {
-        if self.delete_selection() {
-            return;
-        }
-        let b = next_word(&self.chars, self.cursor);
-        if b > self.cursor {
-            self.checkpoint(Kind::Other, true);
-            let c = self.cursor;
-            self.remove_range(c, b);
-        }
+    /// Deletes the selection, or else the char (with `word`: the word) after the cursor.
+    pub fn delete(&mut self, word: bool) {
+        let c = self.cursor;
+        let (a, b, kind) = match self.selection() {
+            Some((a, b)) => (a, b, Kind::Other),
+            None if word => (c, next_word(&self.chars, c), Kind::Other),
+            None => (c, (c + 1).min(self.chars.len()), Kind::Delete),
+        };
+        self.erase(a, b, kind);
     }
 
     /// Moves the cursor to `idx`; with `extend` the selection grows from where it started.
@@ -289,32 +248,22 @@ impl Editor {
         self.last = None;
     }
 
-    pub fn move_left(&mut self, extend: bool) {
-        if !extend {
-            if let Some((a, _)) = self.selection() {
-                self.set_cursor(a, false);
-                return;
-            }
+    /// Cursor left by a char (with `word`: a word). Without `extend`, a selection collapses.
+    pub fn left(&mut self, word: bool, extend: bool) {
+        match self.selection() {
+            Some((a, _)) if !extend && !word => self.set_cursor(a, false),
+            _ if word => self.set_cursor(prev_word(&self.chars, self.cursor), extend),
+            _ => self.set_cursor(self.cursor.saturating_sub(1), extend),
         }
-        self.set_cursor(self.cursor.saturating_sub(1), extend);
     }
 
-    pub fn move_right(&mut self, extend: bool) {
-        if !extend {
-            if let Some((_, b)) = self.selection() {
-                self.set_cursor(b, false);
-                return;
-            }
+    /// Cursor right by a char (with `word`: a word). Without `extend`, a selection collapses.
+    pub fn right(&mut self, word: bool, extend: bool) {
+        match self.selection() {
+            Some((_, b)) if !extend && !word => self.set_cursor(b, false),
+            _ if word => self.set_cursor(next_word(&self.chars, self.cursor), extend),
+            _ => self.set_cursor(self.cursor + 1, extend),
         }
-        self.set_cursor(self.cursor + 1, extend);
-    }
-
-    pub fn word_left(&mut self, extend: bool) {
-        self.set_cursor(prev_word(&self.chars, self.cursor), extend);
-    }
-
-    pub fn word_right(&mut self, extend: bool) {
-        self.set_cursor(next_word(&self.chars, self.cursor), extend);
     }
 
     pub fn select_all(&mut self) {
@@ -323,8 +272,7 @@ impl Editor {
 
     pub fn select_range(&mut self, a: usize, b: usize) {
         let n = self.chars.len();
-        self.anchor = a.min(n);
-        self.cursor = b.min(n);
+        (self.anchor, self.cursor) = (a.min(n), b.min(n));
         self.last = None;
     }
 }

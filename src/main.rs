@@ -82,38 +82,26 @@ struct Canvas<'a> {
 impl Canvas<'_> {
     fn fill(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, c: [u8; 3]) {
         let (x0, x1) = (x0.clamp(0, self.w), x1.clamp(0, self.w));
-        let (y0, y1) = (y0.clamp(0, self.h), y1.clamp(0, self.h));
-        for y in y0..y1 {
+        for y in y0.clamp(0, self.h)..y1.clamp(0, self.h) {
             for x in x0..x1 {
                 let o = ((y * self.w + x) * 4) as usize;
-                self.data[o] = c[2];
-                self.data[o + 1] = c[1];
-                self.data[o + 2] = c[0];
-                self.data[o + 3] = 255;
+                self.data[o..o + 4].copy_from_slice(&[c[2], c[1], c[0], 255]);
             }
         }
     }
 
     /// Blends a glyph's coverage mask over the existing pixels.
     fn blend_glyph(&mut self, g: &Bitmap, x: i32, y: i32, c: [u8; 3]) {
-        for gy in 0..g.h as i32 {
-            let py = y + gy;
-            if py < 0 || py >= self.h {
-                continue;
-            }
-            for gx in 0..g.w as i32 {
-                let px = x + gx;
-                if px < 0 || px >= self.w {
-                    continue;
-                }
-                let cov = g.cov[(gy * g.w as i32 + gx) as usize] as u32;
-                if cov == 0 {
+        for (gy, row) in g.cov.chunks(g.w as usize).enumerate() {
+            let py = y + gy as i32;
+            for (gx, &cov) in row.iter().enumerate() {
+                let px = x + gx as i32;
+                if cov == 0 || py < 0 || py >= self.h || px < 0 || px >= self.w {
                     continue;
                 }
                 let o = ((py * self.w + px) * 4) as usize;
                 for k in 0..3 {
-                    let dst = self.data[o + k] as u32;
-                    let src = c[2 - k] as u32;
+                    let (dst, src, cov) = (self.data[o + k] as u32, c[2 - k] as u32, cov as u32);
                     self.data[o + k] = ((dst * (255 - cov) + src * cov + 127) / 255) as u8;
                 }
             }
@@ -123,12 +111,7 @@ impl Canvas<'_> {
 
 /// Draws the whole note. `s` is the buffer scale; `scroll_y` is in buffer pixels.
 fn render(
-    cv: &mut Canvas,
-    s: f32,
-    editor: &Editor,
-    layout: &Layout,
-    fonts: &mut Fonts,
-    scroll_y: f32,
+    cv: &mut Canvas, s: f32, editor: &Editor, layout: &Layout, fonts: &mut Fonts, scroll_y: f32,
 ) {
     cv.fill(0, 0, cv.w, cv.h, PAPER);
     let chars = editor.chars();
@@ -137,43 +120,27 @@ fn render(
     }
 
     let margin = MARGIN * s;
-    let lh = fonts.line_height;
-    let baseline = fonts.baseline;
-    let space_w = fonts.space_width;
+    let (lh, baseline, space_w) = (fonts.line_height, fonts.baseline, fonts.space_width);
     let first = (scroll_y / lh).floor().max(0.0) as usize;
     let last = (((scroll_y + cv.h as f32) / lh).ceil() as usize + 1).min(layout.lines.len());
-    let selection = editor.selection();
 
     for l in first..last {
         let line = &layout.lines[l];
-        let top = margin + l as f32 * lh - scroll_y;
-        let (y0, y1) = (top.round() as i32, (top + lh).round() as i32);
+        let y0 = (margin + l as f32 * lh - scroll_y).round() as i32;
+        let y1 = y0 + lh as i32;
 
-        if let Some((a, b)) = selection {
-            if a <= line.end && b >= line.start {
-                let lo = a.clamp(line.start, line.end);
-                let hi = b.clamp(line.start, line.end);
-                let x0 = margin + line.xs[lo - line.start];
-                let x1 = margin + line.xs[hi - line.start];
-                if x1 > x0 {
-                    cv.fill(x0.round() as i32, y0, x1.round() as i32, y1, SELECTION);
-                }
-                // A selected line break is shown as a small extra block at the end of the line.
-                if line.end < chars.len() && !layout.is_wrapped(l) && a <= line.end && b > line.end
-                {
-                    let xe = margin + line.xs[line.end - line.start];
-                    cv.fill(
-                        xe.round() as i32,
-                        y0,
-                        (xe + space_w).round() as i32,
-                        y1,
-                        SELECTION,
-                    );
-                }
+        if let Some((a, b)) = editor.selection() {
+            let x = |i: usize| margin + line.xs[i.clamp(line.start, line.end) - line.start];
+            // A selected line break is shown as a small extra block at the end of the line.
+            let newline =
+                line.end < chars.len() && !layout.is_wrapped(l) && a <= line.end && b > line.end;
+            let x1 = x(b) + if newline { space_w } else { 0.0 };
+            if x1 > x(a) {
+                cv.fill(x(a).round() as i32, y0, x1.round() as i32, y1, SELECTION);
             }
         }
 
-        let base_y = (top + baseline).round() as i32;
+        let base_y = y0 + baseline as i32;
         for (col, &c) in chars[line.start..line.end].iter().enumerate() {
             if let Some(g) = fonts.glyph(c) {
                 let x = (margin + line.xs[col]).round() as i32 + g.left;
@@ -185,15 +152,8 @@ fn render(
     // Caret
     let (l, col) = layout.locate(editor.cursor());
     let x = (margin + layout.lines[l].xs[col]).round() as i32;
-    let top = margin + l as f32 * lh - scroll_y;
-    let width = (s.round() as i32).max(1);
-    cv.fill(
-        x,
-        top.round() as i32,
-        x + width,
-        (top + lh).round() as i32,
-        INK,
-    );
+    let top = (margin + l as f32 * lh - scroll_y).round() as i32;
+    cv.fill(x, top, x + s as i32, top + lh as i32, INK);
 }
 
 struct Repeat {
@@ -255,35 +215,26 @@ impl App {
     // ---- layout and scrolling ----
 
     fn relayout(&mut self) {
-        let s = self.scale.max(1) as f32;
+        let s = self.scale as f32;
         self.fonts.set_px(FONT_PX * s);
-        let max_w = (self.width as f32 * s - 2.0 * MARGIN * s).max(1.0);
+        let max_w = ((self.width as f32 - 2.0 * MARGIN) * s).max(1.0);
         let fonts = &mut self.fonts;
         self.layout = Layout::build(self.editor.chars(), max_w, &mut |c| fonts.advance(c));
     }
 
     fn view_height(&self) -> f32 {
-        let s = self.scale.max(1) as f32;
-        (self.height as f32 * s - 2.0 * MARGIN * s).max(1.0)
+        ((self.height as f32 - 2.0 * MARGIN) * self.scale as f32).max(1.0)
     }
 
     fn clamp_scroll(&mut self) {
         let content = self.layout.lines.len() as f32 * self.fonts.line_height;
-        let max = (content - self.view_height()).max(0.0);
-        self.scroll_y = self.scroll_y.clamp(0.0, max);
+        self.scroll_y = self.scroll_y.clamp(0.0, (content - self.view_height()).max(0.0));
     }
 
     fn ensure_cursor_visible(&mut self) {
         let lh = self.fonts.line_height;
-        let (l, _) = self.layout.locate(self.editor.cursor());
-        let top = l as f32 * lh;
-        let bottom = top + lh;
-        let view = self.view_height();
-        if top < self.scroll_y {
-            self.scroll_y = top;
-        } else if bottom > self.scroll_y + view {
-            self.scroll_y = bottom - view;
-        }
+        let top = self.layout.locate(self.editor.cursor()).0 as f32 * lh;
+        self.scroll_y = self.scroll_y.min(top).max(top + lh - self.view_height());
         self.clamp_scroll();
     }
 
@@ -305,16 +256,14 @@ impl App {
     }
 
     fn save_deadline(&self) -> Option<Instant> {
-        self.dirty_since
-            .map(|since| (self.last_edit + SAVE_PAUSE).min(since + SAVE_MAX))
+        self.dirty_since.map(|since| (self.last_edit + SAVE_PAUSE).min(since + SAVE_MAX))
     }
 
     /// Saves and names the note after its first line. Safe to call more than once.
     fn finish(&mut self) {
-        if self.finished {
+        if std::mem::replace(&mut self.finished, true) {
             return;
         }
-        self.finished = true;
         // Text the input method has not committed yet is dropped, not saved.
         self.clear_composition();
         if self.dirty_since.is_some() {
@@ -341,7 +290,7 @@ impl App {
             .map(|at| at.saturating_duration_since(now))
             .min()
     }
-    
+
     fn tick(&mut self) {
         let now = Instant::now();
         let due = match (&mut self.repeat, self.repeat_interval) {
@@ -361,19 +310,6 @@ impl App {
 
     // ---- input method ----
 
-    /// Removes the in-progress composition from the note.
-    fn clear_composition(&mut self) {
-        if self.composing == 0 {
-            return;
-        }
-        let end = self.editor.cursor();
-        self.editor
-            .select_range(end.saturating_sub(self.composing), end);
-        self.editor.backspace();
-        self.composing = 0;
-        self.dirty_since.get_or_insert_with(Instant::now);
-    }
-
     /// Records a text change: marks the note dirty, relayouts and redraws.
     fn after_edit(&mut self) {
         let now = Instant::now();
@@ -384,40 +320,30 @@ impl App {
         self.needs_draw = true;
     }
 
-    /// Applies one input-method update: replace the composition, insert committed text, then
-    /// show the new composition at the cursor.
-    fn ime_done(&mut self) {
+    /// Replaces the in-progress composition (text before the cursor) with `commit` followed by
+    /// a new composition `preedit`.
+    fn compose(&mut self, commit: &str, preedit: &str) {
         let v0 = self.editor.version();
-        self.clear_composition();
-        if let Some(text) = self.pending_commit.take() {
-            self.editor.insert(&text);
-        }
-        let preedit = std::mem::take(&mut self.pending_preedit);
-        if !preedit.is_empty() {
-            self.editor.insert(&preedit);
-            self.composing = preedit.chars().count();
-        }
+        self.composing = self.editor.compose(self.composing, commit, preedit);
         if self.editor.version() != v0 {
             self.after_edit();
         }
         self.needs_draw = true;
     }
 
+    /// Removes the in-progress composition from the note.
+    fn clear_composition(&mut self) {
+        self.compose("", "");
+    }
+
     // ---- keyboard ----
 
     /// Moves the cursor `steps` visual lines (negative = up), keeping the horizontal position.
     fn vertical(&mut self, steps: i32, extend: bool) {
-        let gx = self
-            .goal_x
-            .unwrap_or_else(|| self.layout.x_of(self.editor.cursor()));
-        self.goal_x = Some(gx);
+        let gx = *self.goal_x.get_or_insert_with(|| self.layout.x_of(self.editor.cursor()));
         let mut idx = self.editor.cursor();
         for _ in 0..steps.unsigned_abs() {
-            idx = if steps < 0 {
-                self.layout.up(idx, gx)
-            } else {
-                self.layout.down(idx, gx)
-            };
+            idx = if steps < 0 { self.layout.up(idx, gx) } else { self.layout.down(idx, gx) };
         }
         self.editor.set_cursor(idx, extend);
     }
@@ -428,60 +354,22 @@ impl App {
 
     fn handle_key(&mut self, event: &KeyEvent) {
         // A key that reaches us while text is composing ends the composition.
-        if self.composing > 0 {
-            self.clear_composition();
-            self.relayout();
-        }
+        self.clear_composition();
         let v0 = self.editor.version();
-        let (ctrl, shift, alt, logo) = (
-            self.mods.ctrl,
-            self.mods.shift,
-            self.mods.alt,
-            self.mods.logo,
-        );
-        let mut keep_goal = false;
+        let Modifiers { ctrl, shift, alt, logo, .. } = self.mods;
+        let vertical =
+            matches!(event.keysym, Keysym::Up | Keysym::Down | Keysym::Page_Up | Keysym::Page_Down);
 
         match event.keysym {
-            Keysym::Escape => {
-                self.close();
-                return;
-            }
-            Keysym::Left => {
-                if ctrl {
-                    self.editor.word_left(shift);
-                } else {
-                    self.editor.move_left(shift);
-                }
-            }
-            Keysym::Right => {
-                if ctrl {
-                    self.editor.word_right(shift);
-                } else {
-                    self.editor.move_right(shift);
-                }
-            }
-            Keysym::Up => {
-                self.vertical(-1, shift);
-                keep_goal = true;
-            }
-            Keysym::Down => {
-                self.vertical(1, shift);
-                keep_goal = true;
-            }
-            Keysym::Page_Up => {
-                self.vertical(-self.page_lines(), shift);
-                keep_goal = true;
-            }
-            Keysym::Page_Down => {
-                self.vertical(self.page_lines(), shift);
-                keep_goal = true;
-            }
+            Keysym::Escape => return self.close(),
+            Keysym::Left => self.editor.left(ctrl, shift),
+            Keysym::Right => self.editor.right(ctrl, shift),
+            Keysym::Up => self.vertical(-1, shift),
+            Keysym::Down => self.vertical(1, shift),
+            Keysym::Page_Up => self.vertical(-self.page_lines(), shift),
+            Keysym::Page_Down => self.vertical(self.page_lines(), shift),
             Keysym::Home => {
-                let i = if ctrl {
-                    0
-                } else {
-                    self.layout.line_start_idx(self.editor.cursor())
-                };
+                let i = if ctrl { 0 } else { self.layout.line_start_idx(self.editor.cursor()) };
                 self.editor.set_cursor(i, shift);
             }
             Keysym::End => {
@@ -492,46 +380,25 @@ impl App {
                 };
                 self.editor.set_cursor(i, shift);
             }
-            Keysym::BackSpace => {
-                if ctrl {
-                    self.editor.backspace_word();
-                } else {
-                    self.editor.backspace();
-                }
-            }
-            Keysym::Delete => {
-                if ctrl {
-                    self.editor.delete_word();
-                } else {
-                    self.editor.delete_forward();
-                }
-            }
+            Keysym::BackSpace => self.editor.backspace(ctrl),
+            Keysym::Delete => self.editor.delete(ctrl),
             Keysym::Return | Keysym::KP_Enter => self.editor.insert("\n"),
             Keysym::Tab => self.editor.insert("\t"),
             sym if ctrl && !alt => match sym.key_char().map(|c| c.to_ascii_lowercase()) {
                 Some('a') => self.editor.select_all(),
-                Some('z') => {
-                    if shift {
-                        self.editor.redo();
-                    } else {
-                        self.editor.undo();
-                    }
-                }
-                Some('y') => {
-                    self.editor.redo();
-                }
+                Some('z') if !shift => self.editor.undo(),
+                Some('z' | 'y') => self.editor.redo(),
                 _ => {}
             },
-            _ => {
-                if !ctrl && !alt && !logo {
-                    if let Some(t) = &event.utf8 {
-                        self.editor.insert(t);
-                    }
+            _ if !(ctrl || alt || logo) => {
+                if let Some(t) = &event.utf8 {
+                    self.editor.insert(t);
                 }
             }
+            _ => {}
         }
 
-        if !keep_goal {
+        if !vertical {
             self.goal_x = None;
         }
         if self.editor.version() != v0 {
@@ -541,15 +408,15 @@ impl App {
             self.needs_draw = true;
         }
     }
+
     // ---- mouse ----
 
     /// The cursor position nearest to the mouse pointer.
     fn hit_index(&self) -> usize {
-        let s = self.scale.max(1) as f32;
-        let x = self.mouse.0 as f32 * s - MARGIN * s;
-        let y = self.mouse.1 as f32 * s - MARGIN * s + self.scroll_y;
-        let line = (y / self.fonts.line_height).floor().max(0.0) as usize;
-        self.layout.idx_at(line, x)
+        let s = self.scale as f32;
+        let x = (self.mouse.0 as f32 - MARGIN) * s;
+        let y = (self.mouse.1 as f32 - MARGIN) * s + self.scroll_y;
+        self.layout.idx_at((y / self.fonts.line_height).floor().max(0.0) as usize, x)
     }
 
     fn cursor_moved(&mut self) {
@@ -559,33 +426,24 @@ impl App {
     }
 
     fn mouse_press(&mut self, time: u32) {
+        // A click ends any composition (before the click position is looked up).
+        self.clear_composition();
         let idx = self.hit_index();
         let close_to_last = self.last_click.is_some_and(|(t, p)| {
             time.wrapping_sub(t) < DOUBLE_CLICK_MS
                 && (p.0 - self.mouse.0).abs() < 6.0
                 && (p.1 - self.mouse.1).abs() < 6.0
         });
-        self.click_count = if close_to_last {
-            self.click_count % 3 + 1
-        } else {
-            1
-        };
+        self.click_count = if close_to_last { self.click_count % 3 + 1 } else { 1 };
         self.last_click = Some((time, self.mouse));
-        match self.click_count {
-            1 => {
-                self.editor.set_cursor(idx, self.mods.shift);
-                self.dragging = true;
-            }
-            2 => {
-                let (a, b) = text::word_range(self.editor.chars(), idx);
-                self.editor.select_range(a, b);
-                self.dragging = false;
-            }
-            _ => {
-                let (a, b) = text::line_range(self.editor.chars(), idx);
-                self.editor.select_range(a, b);
-                self.dragging = false;
-            }
+        self.dragging = self.click_count == 1;
+        if self.dragging {
+            self.editor.set_cursor(idx, self.mods.shift);
+        } else {
+            // Double-click selects a word, triple-click a line.
+            let range = if self.click_count == 2 { text::word_range } else { text::line_range };
+            let (a, b) = range(self.editor.chars(), idx);
+            self.editor.select_range(a, b);
         }
         self.cursor_moved();
     }
@@ -594,63 +452,38 @@ impl App {
 
     fn draw(&mut self) {
         self.needs_draw = false;
-        let scale = self.scale.max(1) as u32;
-        let (bw, bh) = (self.width * scale, self.height * scale);
-        let stride = bw as i32 * 4;
-
+        let s = self.scale;
+        let (bw, bh) = (self.width as i32 * s, self.height as i32 * s);
+        let format = wl_shm::Format::Argb8888;
         let buffer = self.buffer.get_or_insert_with(|| {
-            self.pool
-                .create_buffer(bw as i32, bh as i32, stride, wl_shm::Format::Argb8888)
-                .expect("create buffer")
-                .0
+            self.pool.create_buffer(bw, bh, bw * 4, format).expect("create buffer").0
         });
         let canvas = match self.pool.canvas(buffer) {
             Some(canvas) => canvas,
             None => {
                 // The compositor has not released the previous buffer yet: use a second one.
-                let (second, canvas) = self
-                    .pool
-                    .create_buffer(bw as i32, bh as i32, stride, wl_shm::Format::Argb8888)
-                    .expect("create buffer");
+                let (second, canvas) =
+                    self.pool.create_buffer(bw, bh, bw * 4, format).expect("create buffer");
                 *buffer = second;
                 canvas
             }
         };
-
-        let mut cv = Canvas {
-            data: canvas,
-            w: bw as i32,
-            h: bh as i32,
-        };
-        render(
-            &mut cv,
-            scale as f32,
-            &self.editor,
-            &self.layout,
-            &mut self.fonts,
-            self.scroll_y,
-        );
+        let mut cv = Canvas { data: canvas, w: bw, h: bh };
+        render(&mut cv, s as f32, &self.editor, &self.layout, &mut self.fonts, self.scroll_y);
 
         // Tell the input method where the caret is, so its candidate list appears next to it.
-        if self.ime_active {
-            if let Some(text_input) = &self.text_input {
-                let s = scale as f32;
-                let (line, col) = self.layout.locate(self.editor.cursor());
-                let x = (MARGIN * s + self.layout.lines[line].xs[col]) / s;
-                let y = (MARGIN * s + line as f32 * self.fonts.line_height - self.scroll_y) / s;
-                text_input.set_cursor_rectangle(
-                    x as i32,
-                    y as i32,
-                    1,
-                    (self.fonts.line_height / s) as i32,
-                );
-                text_input.commit();
-            }
+        if let Some(text_input) = self.text_input.as_ref().filter(|_| self.ime_active) {
+            let (line, col) = self.layout.locate(self.editor.cursor());
+            let lh = self.fonts.line_height;
+            let x = MARGIN + self.layout.lines[line].xs[col] / s as f32;
+            let y = MARGIN + (line as f32 * lh - self.scroll_y) / s as f32;
+            text_input.set_cursor_rectangle(x as i32, y as i32, 1, (lh / s as f32) as i32);
+            text_input.commit();
         }
 
         let surface = self.window.wl_surface();
-        surface.set_buffer_scale(self.scale);
-        surface.damage_buffer(0, 0, bw as i32, bh as i32);
+        surface.set_buffer_scale(s);
+        surface.damage_buffer(0, 0, bw, bh);
         buffer.attach_to(surface).expect("buffer attach");
         self.window.commit();
     }
@@ -658,47 +491,32 @@ impl App {
 
 impl CompositorHandler for App {
     fn scale_factor_changed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface,
         new_factor: i32,
     ) {
         self.set_scale(new_factor);
     }
 
     fn transform_changed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface,
         _new_transform: wl_output::Transform,
     ) {
     }
 
     fn frame(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
     }
 
     fn surface_enter(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface,
         _output: &wl_output::WlOutput,
     ) {
     }
 
     fn surface_leave(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _surface: &wl_surface::WlSurface,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _surface: &wl_surface::WlSurface,
         _output: &wl_output::WlOutput,
     ) {
     }
@@ -710,26 +528,17 @@ impl OutputHandler for App {
     }
 
     fn new_output(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput,
     ) {
     }
 
     fn update_output(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput,
     ) {
     }
 
     fn output_destroyed(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _output: wl_output::WlOutput,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _output: wl_output::WlOutput,
     ) {
     }
 }
@@ -740,12 +549,8 @@ impl WindowHandler for App {
     }
 
     fn configure(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _window: &Window,
-        configure: WindowConfigure,
-        _serial: u32,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _window: &Window,
+        configure: WindowConfigure, _serial: u32,
     ) {
         let w = configure.new_size.0.map_or(self.width, |v| v.get());
         let h = configure.new_size.1.map_or(self.height, |v| v.get());
@@ -769,10 +574,7 @@ impl SeatHandler for App {
     fn new_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat) {}
 
     fn new_capability(
-        &mut self,
-        _conn: &Connection,
-        qh: &QueueHandle<Self>,
-        seat: wl_seat::WlSeat,
+        &mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
         if capability == Capability::Keyboard && self.keyboard.is_none() {
@@ -780,11 +582,9 @@ impl SeatHandler for App {
                 Ok(keyboard) => self.keyboard = Some(keyboard),
                 Err(e) => eprintln!("{APP_ID}: could not get the keyboard: {e}"),
             }
-            if self.text_input.is_none() {
-                if let Some(manager) = &self.text_manager {
-                    self.text_input = Some(manager.get_text_input(&seat, qh, ()));
-                }
-            }
+            self.text_input = self.text_input.take().or_else(|| {
+                self.text_manager.as_ref().map(|manager| manager.get_text_input(&seat, qh, ()))
+            });
         }
         if capability == Capability::Pointer && self.pointer.is_none() {
             match self.seat_state.get_pointer(qh, &seat) {
@@ -795,10 +595,7 @@ impl SeatHandler for App {
     }
 
     fn remove_capability(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _seat: wl_seat::WlSeat,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _seat: wl_seat::WlSeat,
         capability: Capability,
     ) {
         if capability == Capability::Keyboard {
@@ -820,80 +617,48 @@ impl SeatHandler for App {
 
 impl KeyboardHandler for App {
     fn enter(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _keyboard: &wl_keyboard::WlKeyboard,
-        _surface: &wl_surface::WlSurface,
-        _serial: u32,
-        _raw: &[u32],
-        _keysyms: &[Keysym],
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard, _surface: &wl_surface::WlSurface, _serial: u32,
+        _raw: &[u32], _keysyms: &[Keysym],
     ) {
     }
 
     fn leave(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _keyboard: &wl_keyboard::WlKeyboard,
-        _surface: &wl_surface::WlSurface,
-        _serial: u32,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard, _surface: &wl_surface::WlSurface, _serial: u32,
     ) {
         self.repeat = None;
     }
 
     fn press_key(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _keyboard: &wl_keyboard::WlKeyboard,
-        _serial: u32,
-        event: KeyEvent,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard, _serial: u32, event: KeyEvent,
     ) {
         self.handle_key(&event);
         if !self.exit && !event.keysym.is_modifier_key() {
-            self.repeat = Some(Repeat {
-                event,
-                next: Instant::now() + self.repeat_delay,
-            });
+            self.repeat = Some(Repeat { event, next: Instant::now() + self.repeat_delay });
         }
     }
 
     fn release_key(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _keyboard: &wl_keyboard::WlKeyboard,
-        _serial: u32,
-        event: KeyEvent,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard, _serial: u32, event: KeyEvent,
     ) {
-        if self
-            .repeat
-            .as_ref()
-            .is_some_and(|r| r.event.raw_code == event.raw_code)
-        {
+        if self.repeat.as_ref().is_some_and(|r| r.event.raw_code == event.raw_code) {
             self.repeat = None;
         }
     }
 
     fn update_modifiers(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _keyboard: &wl_keyboard::WlKeyboard,
-        _serial: u32,
-        modifiers: Modifiers,
-        _layout: u32,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard, _serial: u32, modifiers: Modifiers, _layout: u32,
     ) {
         self.mods = modifiers;
     }
 
     fn update_repeat_info(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _keyboard: &wl_keyboard::WlKeyboard,
-        info: RepeatInfo,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>,
+        _keyboard: &wl_keyboard::WlKeyboard, info: RepeatInfo,
     ) {
         match info {
             RepeatInfo::Repeat { rate, delay } => {
@@ -908,10 +673,7 @@ impl KeyboardHandler for App {
 
 impl PointerHandler for App {
     fn pointer_frame(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _pointer: &wl_pointer::WlPointer,
+        &mut self, _conn: &Connection, _qh: &QueueHandle<Self>, _pointer: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
         for event in events {
@@ -920,35 +682,24 @@ impl PointerHandler for App {
             }
             self.mouse = event.position;
             match event.kind {
-                PointerEventKind::Enter { .. } | PointerEventKind::Leave { .. } => {}
-                PointerEventKind::Motion { .. } => {
-                    if self.dragging {
-                        let idx = self.hit_index();
-                        self.editor.set_cursor(idx, true);
-                        self.cursor_moved();
-                    }
+                PointerEventKind::Motion { .. } if self.dragging => {
+                    let idx = self.hit_index();
+                    self.editor.set_cursor(idx, true);
+                    self.cursor_moved();
                 }
-                PointerEventKind::Press { time, button, .. } => {
-                    if button == BTN_LEFT {
-                        self.mouse_press(time);
-                    }
-                }
-                PointerEventKind::Release { button, .. } => {
-                    if button == BTN_LEFT {
-                        self.dragging = false;
-                    }
-                }
+                PointerEventKind::Press { time, button: BTN_LEFT, .. } => self.mouse_press(time),
+                PointerEventKind::Release { button: BTN_LEFT, .. } => self.dragging = false,
                 PointerEventKind::Axis { vertical, .. } => {
                     // Wheel notches scroll three lines each; touchpads give a smooth amount.
-                    let delta = if vertical.discrete != 0 {
+                    self.scroll_y += if vertical.discrete != 0 {
                         vertical.discrete as f32 * 3.0 * self.fonts.line_height
                     } else {
-                        vertical.absolute as f32 * self.scale.max(1) as f32
+                        vertical.absolute as f32 * self.scale as f32
                     };
-                    self.scroll_y += delta;
                     self.clamp_scroll();
                     self.needs_draw = true;
                 }
+                _ => {}
             }
         }
     }
@@ -971,12 +722,8 @@ impl ProvidesRegistryState for App {
 
 impl Dispatch<zwp_text_input_manager_v3::ZwpTextInputManagerV3, ()> for App {
     fn event(
-        _: &mut Self,
-        _: &zwp_text_input_manager_v3::ZwpTextInputManagerV3,
-        _: zwp_text_input_manager_v3::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
+        _: &mut Self, _: &zwp_text_input_manager_v3::ZwpTextInputManagerV3,
+        _: zwp_text_input_manager_v3::Event, _: &(), _: &Connection, _: &QueueHandle<Self>,
     ) {
     }
 }
@@ -984,12 +731,8 @@ impl Dispatch<zwp_text_input_manager_v3::ZwpTextInputManagerV3, ()> for App {
 /// Events from the input method (IME), for example fcitx or ibus.
 impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for App {
     fn event(
-        app: &mut Self,
-        text_input: &zwp_text_input_v3::ZwpTextInputV3,
-        event: zwp_text_input_v3::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
+        app: &mut Self, text_input: &zwp_text_input_v3::ZwpTextInputV3,
+        event: zwp_text_input_v3::Event, _: &(), _: &Connection, _: &QueueHandle<Self>,
     ) {
         use zwp_text_input_v3::Event;
         match event {
@@ -1003,17 +746,17 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for App {
                 app.ime_active = false;
                 app.pending_commit = None;
                 app.pending_preedit.clear();
-                let v0 = app.editor.version();
                 app.clear_composition();
-                if app.editor.version() != v0 {
-                    app.after_edit();
-                }
                 text_input.disable();
                 text_input.commit();
             }
             Event::PreeditString { text, .. } => app.pending_preedit = text.unwrap_or_default(),
             Event::CommitString { text } => app.pending_commit = text,
-            Event::Done { .. } => app.ime_done(),
+            Event::Done { .. } => {
+                let commit = app.pending_commit.take().unwrap_or_default();
+                let preedit = std::mem::take(&mut app.pending_preedit);
+                app.compose(&commit, &preedit);
+            }
             _ => {}
         }
     }
@@ -1028,17 +771,9 @@ delegate_pointer!(App);
 delegate_xdg_shell!(App);
 delegate_xdg_window!(App);
 
-fn print_usage() {
-    println!(
-        "hyprsticky: minimal sticky notes for Hyprland\n\n\
-         usage:\n  \
-         hyprsticky           open a new, empty note\n  \
-         hyprsticky <name>    open (or create) the note with that name\n  \
-         hyprsticky list      list saved notes, newest first\n\n\
-         environment:\n  \
-         HYPRSTICKY_DIR   folder where notes are stored (default ~/.local/share/hyprsticky)\n  \
-         HYPRSTICKY_FONT  fontconfig pattern or font file path (default sans-serif)"
-    );
+fn die(what: &str, e: impl std::fmt::Display) -> ! {
+    eprintln!("{APP_ID}: {what}: {e}");
+    std::process::exit(1)
 }
 
 fn main() {
@@ -1046,40 +781,36 @@ fn main() {
     let arg = std::env::args().nth(1);
 
     match arg.as_deref() {
-        Some("list" | "--list" | "-l") => {
-            store::list_notes(&dir);
-            return;
-        }
+        Some("list" | "--list" | "-l") => return store::list_notes(&dir),
         Some("help" | "--help" | "-h") => {
-            print_usage();
-            return;
+            return println!(
+                "hyprsticky: minimal sticky notes for Hyprland\n\n\
+                 usage:\n  \
+                 hyprsticky           open a new, empty note\n  \
+                 hyprsticky <name>    open (or create) the note with that name\n  \
+                 hyprsticky list      list saved notes, newest first\n\n\
+                 environment:\n  \
+                 HYPRSTICKY_DIR   folder where notes are stored (default ~/.local/share/hyprsticky)\n  \
+                 HYPRSTICKY_FONT  fontconfig pattern or font file path (default sans-serif)"
+            );
         }
         _ => {}
     }
 
     // No argument: a brand-new, empty note. With a name: open (or create) that note.
-    let id = match arg.map(|n| store::clean_name(&n)).filter(|n| !n.is_empty()) {
-        Some(name) => name,
-        None => store::new_note_id(&dir),
-    };
+    let id = arg.map(|n| store::clean_name(&n)).filter(|n| !n.is_empty());
+    let id = id.unwrap_or_else(|| store::new_note_id(&dir));
     let path = store::note_path(&dir, &id);
     let mut editor = Editor::new(&store::read_note(&path));
     editor.set_cursor(usize::MAX, false);
 
     let font_spec = std::env::var("HYPRSTICKY_FONT").unwrap_or_default();
-    let fonts = Fonts::new(&font_spec).unwrap_or_else(|e| {
-        eprintln!("{APP_ID}: {e}");
-        std::process::exit(1);
-    });
+    let fonts = Fonts::new(&font_spec).unwrap_or_else(|e| die("font", e));
 
-    let conn = Connection::connect_to_env().unwrap_or_else(|e| {
-        eprintln!("{APP_ID}: could not connect to Wayland: {e}");
-        std::process::exit(1);
-    });
-    let (globals, event_queue) = registry_queue_init(&conn).unwrap_or_else(|e| {
-        eprintln!("{APP_ID}: could not read the Wayland globals: {e}");
-        std::process::exit(1);
-    });
+    let conn =
+        Connection::connect_to_env().unwrap_or_else(|e| die("could not connect to Wayland", e));
+    let (globals, event_queue) =
+        registry_queue_init(&conn).unwrap_or_else(|e| die("could not read the Wayland globals", e));
     let qh = event_queue.handle();
     let mut event_loop: EventLoop<App> = EventLoop::try_new().expect("could not create event loop");
     WaylandSource::new(conn.clone(), event_queue)
@@ -1090,9 +821,8 @@ fn main() {
     let xdg_shell = XdgShell::bind(&globals, &qh).expect("xdg shell not available");
     let shm = Shm::bind(&globals, &qh).expect("wl_shm not available");
     // Optional: without it the note still works, just without input-method support.
-    let text_manager = globals
-        .bind::<zwp_text_input_manager_v3::ZwpTextInputManagerV3, _, _>(&qh, 1..=1, ())
-        .ok();
+    let text_manager =
+        globals.bind::<zwp_text_input_manager_v3::ZwpTextInputManagerV3, _, _>(&qh, 1..=1, ()).ok();
 
     let surface = compositor.create_surface(&qh);
     let window = xdg_shell.create_window(surface, WindowDecorations::None, &qh);
@@ -1148,8 +878,7 @@ fn main() {
     app.relayout();
 
     loop {
-        let timeout = app.next_timeout();
-        if let Err(e) = event_loop.dispatch(timeout, &mut app) {
+        if let Err(e) = event_loop.dispatch(app.next_timeout(), &mut app) {
             // The compositor went away: keep what was typed.
             eprintln!("{APP_ID}: lost the Wayland connection: {e}");
             app.finish();

@@ -26,20 +26,15 @@ pub fn notes_dir() -> PathBuf {
 /// Turns text into a safe file name: drops characters that are invalid in file names or break
 /// Obsidian links, collapses whitespace, and trims leading/trailing dots and spaces.
 pub fn clean_name(s: &str) -> String {
-    let kept: String = s
-        .chars()
-        .filter(|c| !c.is_control() && !"\\/:*?\"<>|#^[]".contains(*c))
-        .collect();
+    let kept: String =
+        s.chars().filter(|c| !c.is_control() && !"\\/:*?\"<>|#^[]".contains(*c)).collect();
     let joined = kept.split_whitespace().collect::<Vec<_>>().join(" ");
     joined.trim_matches('.').trim().to_string()
 }
 
 /// A fresh id for a new note: the current time in milliseconds.
 pub fn new_note_id(dir: &Path) -> String {
-    let mut n = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
+    let mut n = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
     while dir.join(format!("{n}.{EXT}")).exists() {
         n += 1;
     }
@@ -100,35 +95,18 @@ pub fn rename_to_title(path: &Path, text: &str) -> Option<PathBuf> {
 
 /// Prints saved notes, newest first: id, then the first line.
 pub fn list_notes(dir: &Path) {
-    let mut notes = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some(EXT) {
-                continue;
-            }
-            let id = path
-                .file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            let first_line: String = fs::read_to_string(&path)
-                .unwrap_or_default()
-                .lines()
-                .next()
-                .unwrap_or("")
-                .chars()
-                .take(60)
-                .collect();
-            let modified = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(UNIX_EPOCH);
-            notes.push((modified, id, first_line));
-        }
-    }
-    notes.sort_by(|a, b| b.0.cmp(&a.0));
-    for (_, id, first_line) in notes {
-        println!("{id}\t{first_line}");
+    let mut notes: Vec<_> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == EXT))
+        .map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH), e.path()))
+        .collect();
+    notes.sort_by(|a, b| b.cmp(a));
+    for (_, path) in notes {
+        let text = read_note(&path);
+        let first_line: String = text.lines().next().unwrap_or("").chars().take(60).collect();
+        println!("{}\t{first_line}", path.file_stem().unwrap_or_default().to_string_lossy());
     }
 }
 
@@ -195,10 +173,7 @@ mod tests {
         assert_eq!(read_note(&d.join("Buy milk.md")), "old");
         let p3 = d.join("1730372000002.md");
         write_note(&p3, "Buy milk");
-        assert_eq!(
-            rename_to_title(&p3, "Buy milk").unwrap(),
-            d.join("Buy milk 3.md")
-        );
+        assert_eq!(rename_to_title(&p3, "Buy milk").unwrap(), d.join("Buy milk 3.md"));
     }
 
     #[test]

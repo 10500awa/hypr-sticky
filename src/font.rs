@@ -10,7 +10,7 @@
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
 use memmap2::Mmap;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     fs::File,
     path::{Path, PathBuf},
     process::Command,
@@ -33,10 +33,10 @@ pub struct Bitmap {
     pub left: i32,
     pub top: i32,
     pub w: u32,
-    pub h: u32,
     pub cov: Vec<u8>,
 }
 
+#[derive(Default)]
 pub struct Fonts {
     faces: Vec<FontRef<'static>>,
     loaded: Vec<(PathBuf, u32)>,
@@ -47,34 +47,18 @@ pub struct Fonts {
     pub line_height: f32,
     pub baseline: f32,
     pub space_width: f32,
-    adv: HashMap<char, f32>,
     glyphs: HashMap<char, Option<Bitmap>>,
     face_of: HashMap<char, usize>,
-    uncovered: HashSet<char>,
 }
 
 /// Asks fontconfig for the best font file for a pattern.
 fn fc_match(pattern: &str) -> Option<(PathBuf, u32)> {
-    let out = Command::new("fc-match")
-        .args(["-f", "%{file}\n%{index}\n", pattern])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8(out.stdout).ok()?;
-    let mut lines = s.lines();
-    let file = lines.next()?.trim();
-    if file.is_empty() {
-        return None;
-    }
+    let out = Command::new("fc-match").args(["-f", "%{file}\n%{index}", pattern]).output().ok()?;
+    let out = String::from_utf8(out.stdout).ok()?;
+    let (file, index) = out.split_once('\n')?;
     // The upper 16 bits can select a named instance of a variable font; we only need the face.
-    let index = lines
-        .next()
-        .and_then(|l| l.trim().parse::<u32>().ok())
-        .unwrap_or(0)
-        & 0xFFFF;
-    Some((PathBuf::from(file), index))
+    let index = index.trim().parse::<u32>().unwrap_or(0) & 0xFFFF;
+    (!file.is_empty()).then(|| (PathBuf::from(file), index))
 }
 
 /// Memory-maps a font file. The mapping is kept for the life of the process.
@@ -95,47 +79,25 @@ impl Fonts {
     /// path of a font file. Defaults to "sans-serif" when empty.
     pub fn new(spec: &str) -> Result<Fonts, String> {
         let spec = spec.trim();
-        let (face, key, fallback_pattern) = if spec.starts_with('/') {
-            let path = PathBuf::from(spec);
-            let face =
-                load_face(&path, 0).ok_or_else(|| format!("could not load font file {spec}"))?;
-            (face, (path, 0), "sans-serif".to_string())
+        let (key, pattern) = if spec.starts_with('/') {
+            ((PathBuf::from(spec), 0), "sans-serif")
         } else {
             let pattern = if spec.is_empty() { "sans-serif" } else { spec };
-            let (path, index) = fc_match(pattern)
-                .or_else(|| {
-                    FALLBACK_FILES
-                        .iter()
-                        .map(PathBuf::from)
-                        .find(|p| p.exists())
-                        .map(|p| (p, 0))
-                })
-                .ok_or_else(|| {
-                    "no font found: install fontconfig and a font, or set HYPRSTICKY_FONT to a \
-                     font file path"
-                        .to_string()
-                })?;
-            let face = load_face(&path, index).ok_or_else(|| {
-                format!(
-                    "could not load font {} (only TrueType/OpenType fonts are supported; \
-                     set HYPRSTICKY_FONT to one)",
-                    path.display()
-                )
-            })?;
-            (face, (path, index), pattern.to_string())
+            let found = fc_match(pattern).or_else(|| {
+                FALLBACK_FILES.iter().map(PathBuf::from).find(|p| p.exists()).map(|p| (p, 0))
+            });
+            let msg = "no font found: install fontconfig and a font, or set HYPRSTICKY_FONT to a font file path";
+            (found.ok_or(msg)?, pattern)
         };
+        let face = load_face(&key.0, key.1).ok_or_else(|| {
+            let (path, hint) = (key.0.display(), "only TrueType/OpenType fonts work");
+            format!("could not load font {path} ({hint}; set HYPRSTICKY_FONT to one)")
+        })?;
         let mut fonts = Fonts {
             faces: vec![face],
             loaded: vec![key],
-            fallback_pattern,
-            px: 0.0,
-            line_height: 0.0,
-            baseline: 0.0,
-            space_width: 0.0,
-            adv: HashMap::new(),
-            glyphs: HashMap::new(),
-            face_of: HashMap::new(),
-            uncovered: HashSet::new(),
+            fallback_pattern: pattern.to_string(),
+            ..Default::default()
         };
         fonts.set_px(16.0);
         Ok(fonts)
@@ -147,7 +109,6 @@ impl Fonts {
             return;
         }
         self.px = px;
-        self.adv.clear();
         self.glyphs.clear();
 
         let base = &self.faces[0];
@@ -167,19 +128,12 @@ impl Fonts {
         }
         let covers = |faces: &[FontRef<'static>]| faces.iter().position(|f| f.glyph_id(c).0 != 0);
         let mut found = covers(&self.faces);
-        if found.is_none() && !c.is_control() && !self.uncovered.contains(&c) {
+        if found.is_none() && !c.is_control() {
             let pattern = format!("{}:charset={:x}", self.fallback_pattern, c as u32);
-            if let Some((path, index)) = fc_match(&pattern) {
-                if !self.loaded.iter().any(|(p, i)| *p == path && *i == index) {
-                    if let Some(face) = load_face(&path, index) {
-                        self.faces.push(face);
-                    }
-                    self.loaded.push((path, index));
-                    found = covers(&self.faces);
-                }
-            }
-            if found.is_none() {
-                self.uncovered.insert(c);
+            if let Some(key) = fc_match(&pattern).filter(|k| !self.loaded.contains(k)) {
+                self.faces.extend(load_face(&key.0, key.1));
+                self.loaded.push(key);
+                found = covers(&self.faces);
             }
         }
         let i = found.unwrap_or(0);
@@ -195,15 +149,9 @@ impl Fonts {
         if c.is_control() {
             return 0.0;
         }
-        if let Some(&a) = self.adv.get(&c) {
-            return a;
-        }
         let i = self.face_index(c);
         let face = &self.faces[i];
-        let scaled = face.as_scaled(pxscale(face, self.px));
-        let a = scaled.h_advance(face.glyph_id(c));
-        self.adv.insert(c, a);
-        a
+        face.as_scaled(pxscale(face, self.px)).h_advance(face.glyph_id(c))
     }
 
     /// The rasterized glyph for `c`, or None for characters with nothing to draw.
@@ -215,32 +163,22 @@ impl Fonts {
             let bitmap = self.rasterize(c);
             self.glyphs.insert(c, bitmap);
         }
-        self.glyphs.get(&c).and_then(|b| b.as_ref())
+        self.glyphs[&c].as_ref()
     }
 
     fn rasterize(&mut self, c: char) -> Option<Bitmap> {
         let i = self.face_index(c);
         let face = &self.faces[i];
-        let glyph = face
-            .glyph_id(c)
-            .with_scale_and_position(pxscale(face, self.px), point(0.0, 0.0));
+        let glyph =
+            face.glyph_id(c).with_scale_and_position(pxscale(face, self.px), point(0.0, 0.0));
         let outlined = face.outline_glyph(glyph)?;
         let bounds = outlined.px_bounds();
-        let w = bounds.width().ceil() as u32;
-        let h = bounds.height().ceil() as u32;
+        let (w, h) = (bounds.width().ceil() as u32, bounds.height().ceil() as u32);
         if w == 0 || h == 0 {
             return None;
         }
         let mut cov = vec![0u8; (w * h) as usize];
-        outlined.draw(|x, y, v| {
-            cov[(y * w + x) as usize] = (v.clamp(0.0, 1.0) * 255.0) as u8;
-        });
-        Some(Bitmap {
-            left: bounds.min.x.floor() as i32,
-            top: bounds.min.y.floor() as i32,
-            w,
-            h,
-            cov,
-        })
+        outlined.draw(|x, y, v| cov[(y * w + x) as usize] = (v.clamp(0.0, 1.0) * 255.0) as u8);
+        Some(Bitmap { left: bounds.min.x.floor() as i32, top: bounds.min.y.floor() as i32, w, cov })
     }
 }

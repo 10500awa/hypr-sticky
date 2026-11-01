@@ -22,11 +22,7 @@ fn break_after(c: char) -> bool {
 }
 
 fn wrap_paragraph(
-    chars: &[char],
-    s: usize,
-    e: usize,
-    max_w: f32,
-    adv: &mut dyn FnMut(char) -> f32,
+    chars: &[char], s: usize, e: usize, max_w: f32, adv: &mut dyn FnMut(char) -> f32,
     lines: &mut Vec<Line>,
 ) {
     let mut start = s;
@@ -42,11 +38,7 @@ fn wrap_paragraph(
                 _ => i,
             };
             xs.truncate(brk - start + 1);
-            lines.push(Line {
-                start,
-                end: brk,
-                xs: std::mem::take(&mut xs),
-            });
+            lines.push(Line { start, end: brk, xs: std::mem::take(&mut xs) });
             start = brk;
             xs = vec![0.0];
             x = 0.0;
@@ -69,10 +61,7 @@ impl Layout {
         let mut lines = Vec::new();
         let mut i = 0;
         loop {
-            let p_end = chars[i..]
-                .iter()
-                .position(|&c| c == '\n')
-                .map_or(chars.len(), |p| i + p);
+            let p_end = chars[i..].iter().position(|&c| c == '\n').map_or(chars.len(), |p| i + p);
             wrap_paragraph(chars, i, p_end, max_width, adv, &mut lines);
             if p_end >= chars.len() {
                 return Layout { lines };
@@ -92,10 +81,7 @@ impl Layout {
         let p = self.lines.partition_point(|l| l.start <= idx);
         let l = p.saturating_sub(1);
         let line = &self.lines[l];
-        (
-            l,
-            (idx.saturating_sub(line.start)).min(line.end - line.start),
-        )
+        (l, (idx.saturating_sub(line.start)).min(line.end - line.start))
     }
 
     pub fn x_of(&self, idx: usize) -> f32 {
@@ -112,11 +98,7 @@ impl Layout {
     /// next line).
     fn max_col(&self, l: usize) -> usize {
         let len = self.lines[l].end - self.lines[l].start;
-        if self.is_wrapped(l) && len > 0 {
-            len - 1
-        } else {
-            len
-        }
+        if self.is_wrapped(l) && len > 0 { len - 1 } else { len }
     }
 
     /// The cursor position on line `l` closest to x offset `x`.
@@ -141,20 +123,12 @@ impl Layout {
     /// Cursor position one line up, keeping the horizontal position `goal_x`.
     pub fn up(&self, idx: usize, goal_x: f32) -> usize {
         let l = self.locate(idx).0;
-        if l == 0 {
-            0
-        } else {
-            self.idx_at(l - 1, goal_x)
-        }
+        if l == 0 { 0 } else { self.idx_at(l - 1, goal_x) }
     }
 
     /// Cursor position one line down, keeping the horizontal position `goal_x`.
     pub fn down(&self, idx: usize, goal_x: f32) -> usize {
         let l = self.locate(idx).0;
-        if l + 1 >= self.lines.len() {
-            self.text_end()
-        } else {
-            self.idx_at(l + 1, goal_x)
-        }
+        if l + 1 >= self.lines.len() { self.text_end() } else { self.idx_at(l + 1, goal_x) }
     }
 }
