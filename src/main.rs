@@ -1,8 +1,5 @@
 //! hyprsticky: minimal sticky notes for Hyprland.
-//!
 //! A plain Wayland client that draws into shared memory with the CPU: no GPU, no toolkit.
-//! That keeps memory use small: about 4.4 MB resident (1.8 MB of it private) with a note open,
-//! measured on one machine, against roughly 168 MB for the earlier egui/OpenGL version.
 //! Each note is one window and one markdown file.
 
 mod font;
@@ -56,14 +53,14 @@ use wayland_protocols::wp::text_input::zv3::client::{
     zwp_text_input_manager_v3, zwp_text_input_v3,
 };
 
-const DEFAULT_SIZE: u32 = 260;
+const DEFAULT_SIZE: u32 = 320;
 /// Font size in logical pixels per em.
-const FONT_PX: f32 = 15.0;
+const FONT_PX: f32 = 16.0;
 /// Space between the window edge and the text, in logical pixels.
 const MARGIN: f32 = 10.0;
 
-const PAPER: [u8; 3] = [255, 241, 118];
-const INK: [u8; 3] = [45, 40, 20];
+const PAPER: [u8; 3] = [254, 255, 156];
+const INK: [u8; 3] = [10,10,10];
 const DIM: [u8; 3] = [150, 135, 60];
 const LINK: [u8; 3] = [25, 75, 170];
 const CODE: [u8; 3] = [120, 40, 20];
