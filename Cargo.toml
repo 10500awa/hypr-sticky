@@ -6,8 +6,15 @@ description = "Minimal sticky notes for Hyprland"
 license = "MIT"
 
 [dependencies]
-# Wayland + OpenGL only: no X11, no GTK, no layer-shell.
-eframe = { version = "0.32", default-features = false, features = ["default_fonts", "glow", "wayland"] }
+# Wayland client + a software-drawn window. No GPU, GL or GTK.
+smithay-client-toolkit = "0.19"
+wayland-client = "0.31"
+# text-input-v3 lets your input method (IME) type into the note.
+wayland-protocols = { version = "0.32", features = ["client", "unstable"] }
+# Glyph outlines, rasterized on the CPU.
+ab_glyph = "0.2"
+# Font files are mapped, not read, so only the glyphs used are paged in.
+memmap2 = "0.9"
 
 [profile.release]
 opt-level = "s"

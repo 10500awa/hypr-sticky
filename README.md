@@ -4,8 +4,11 @@ Minimal sticky notes for the Hyprland window manager, written in Rust.
 
 Every time you launch it you get a **new, empty note**. Each note is a markdown (`.md`) file in
 `~/.local/share/hyprsticky/` (or `$XDG_DATA_HOME/hyprsticky/`), saved on every keystroke.
-A note you never type in leaves no file behind. Built on egui/eframe with the Wayland +
-OpenGL backends only: no GTK, no X11.
+A note you never type in leaves no file behind. It talks to Wayland directly and draws on the
+CPU, so there is no GPU, OpenGL, GTK or toolkit in memory.
+
+Your input method (fcitx, ibus, etc.) works in notes, so you can type Chinese, Japanese and
+Korean. Text is shown with a system font, falling back to a CJK font when needed.
 
 Because notes are plain markdown files, you can browse and organize them with Obsidian or
 any other markdown tool (see [Obsidian](#obsidian)).
@@ -26,8 +29,14 @@ hyprsticky "Buy milk"   # reopen a saved note by its name (the file name without
 hyprsticky todo         # open (or create) a note with a name you choose
 ```
 
-`Esc` closes a note. Nothing is lost, since it saves as you type.
+`Esc` closes a note. Notes save two seconds after you stop typing (at most every 10 seconds
+while typing non-stop), and again when the note closes.
 If you delete all the text in a note, its file is removed.
+
+Keys: arrows, Home/End (Ctrl for the start/end of the note), Ctrl+Left/Right by word,
+Ctrl+A select all, Ctrl+Z undo, Ctrl+Shift+Z or Ctrl+Y redo, Ctrl+Backspace/Delete for a word.
+Mouse: click to place the cursor, drag to select, double-click for a word, triple-click for a line.
+Scroll wheel moves through long notes.
 
 ## Obsidian
 
