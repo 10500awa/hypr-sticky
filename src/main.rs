@@ -540,7 +540,7 @@ impl App {
             self.ensure_cursor_visible();
             self.needs_draw = true;
         }
-
+    }
     // ---- mouse ----
 
     /// The cursor position nearest to the mouse pointer.
