@@ -1,7 +1,12 @@
-//! Word-wrapping and hit-testing for a block of text. No dependencies: character widths come
-//! from a callback, so the font code stays separate.
+//! Word-wrapping and hit-testing for a block of markdown text.
+
+use crate::{
+    font::Fonts,
+    md::{self, Style},
+};
 
 /// One visual (wrapped) line.
+#[derive(Default)]
 pub struct Line {
     /// Index of the first char on the line.
     pub start: usize,
@@ -9,10 +14,18 @@ pub struct Line {
     pub end: usize,
     /// `xs[i]` is the x offset of the char at `start + i`; `xs[end - start]` is the line width.
     pub xs: Vec<f32>,
+    /// Top of the line and its height; headings make a line taller.
+    pub y: f32,
+    pub h: f32,
+    /// Style of the first char, which sets the line's height and baseline.
+    pub style: Style,
 }
 
+#[derive(Default)]
 pub struct Layout {
     pub lines: Vec<Line>,
+    /// Markdown style of every char.
+    pub styles: Vec<Style>,
 }
 
 /// Can a line break after this character? After spaces, and after CJK characters, which
@@ -22,7 +35,7 @@ fn break_after(c: char) -> bool {
 }
 
 fn wrap_paragraph(
-    chars: &[char], s: usize, e: usize, max_w: f32, adv: &mut dyn FnMut(char) -> f32,
+    chars: &[char], styles: &[Style], (s, e): (usize, usize), max_w: f32, fonts: &mut Fonts,
     lines: &mut Vec<Line>,
 ) {
     let mut start = s;
@@ -31,14 +44,14 @@ fn wrap_paragraph(
     let mut last_break: Option<usize> = None;
     let mut i = s;
     while i < e {
-        let w = adv(chars[i]);
+        let w = fonts.advance(chars[i], styles[i]);
         if x + w > max_w && i > start {
             let brk = match last_break {
                 Some(b) if b > start => b,
                 _ => i,
             };
             xs.truncate(brk - start + 1);
-            lines.push(Line { start, end: brk, xs: std::mem::take(&mut xs) });
+            lines.push(Line { start, end: brk, xs: std::mem::take(&mut xs), ..Default::default() });
             start = brk;
             xs = vec![0.0];
             x = 0.0;
@@ -53,21 +66,39 @@ fn wrap_paragraph(
             last_break = Some(i);
         }
     }
-    lines.push(Line { start, end: e, xs });
+    lines.push(Line { start, end: e, xs, ..Default::default() });
 }
 
 impl Layout {
-    pub fn build(chars: &[char], max_width: f32, adv: &mut dyn FnMut(char) -> f32) -> Layout {
+    pub fn build(chars: &[char], max_width: f32, fonts: &mut Fonts) -> Layout {
+        let styles = md::styles(chars);
         let mut lines = Vec::new();
         let mut i = 0;
         loop {
             let p_end = chars[i..].iter().position(|&c| c == '\n').map_or(chars.len(), |p| i + p);
-            wrap_paragraph(chars, i, p_end, max_width, adv, &mut lines);
+            wrap_paragraph(chars, &styles, (i, p_end), max_width, fonts, &mut lines);
             if p_end >= chars.len() {
-                return Layout { lines };
+                break;
             }
             i = p_end + 1;
         }
+        let mut y = 0.0;
+        for line in &mut lines {
+            line.style = styles.get(line.start).copied().unwrap_or_default();
+            (line.y, line.h) = (y, fonts.metrics(line.style).0);
+            y += line.h;
+        }
+        Layout { lines, styles }
+    }
+
+    /// Total height of the text.
+    pub fn height(&self) -> f32 {
+        self.lines.last().map_or(0.0, |l| l.y + l.h)
+    }
+
+    /// The line at vertical offset `y` (the first or last line when `y` is outside the text).
+    pub fn line_at(&self, y: f32) -> usize {
+        self.lines.partition_point(|l| l.y + l.h <= y).min(self.lines.len() - 1)
     }
 
     /// Index just past the last char of the text.

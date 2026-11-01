@@ -7,6 +7,7 @@
 
 mod font;
 mod layout;
+mod md;
 mod store;
 mod text;
 
@@ -48,6 +49,7 @@ use smithay_client_toolkit::{
 
 use font::{Bitmap, Fonts};
 use layout::Layout;
+use md::Style;
 use store::APP_ID;
 use text::Editor;
 use wayland_protocols::wp::text_input::zv3::client::{
@@ -62,6 +64,10 @@ const MARGIN: f32 = 10.0;
 
 const PAPER: [u8; 3] = [255, 241, 118];
 const INK: [u8; 3] = [45, 40, 20];
+const DIM: [u8; 3] = [150, 135, 60];
+const LINK: [u8; 3] = [25, 75, 170];
+const CODE: [u8; 3] = [120, 40, 20];
+const QUOTE: [u8; 3] = [100, 90, 40];
 const SELECTION: [u8; 3] = [240, 196, 48];
 
 /// Save this long after the last edit...
@@ -109,6 +115,20 @@ impl Canvas<'_> {
     }
 }
 
+fn color(st: Style) -> [u8; 3] {
+    if st.dim {
+        DIM
+    } else if st.link {
+        LINK
+    } else if st.mono {
+        CODE
+    } else if st.quote {
+        QUOTE
+    } else {
+        INK
+    }
+}
+
 /// Draws the whole note. `s` is the buffer scale; `scroll_y` is in buffer pixels.
 fn render(
     cv: &mut Canvas, s: f32, editor: &Editor, layout: &Layout, fonts: &mut Fonts, scroll_y: f32,
@@ -120,40 +140,45 @@ fn render(
     }
 
     let margin = MARGIN * s;
-    let (lh, baseline, space_w) = (fonts.line_height, fonts.baseline, fonts.space_width);
-    let first = (scroll_y / lh).floor().max(0.0) as usize;
-    let last = (((scroll_y + cv.h as f32) / lh).ceil() as usize + 1).min(layout.lines.len());
+    let first = layout.line_at(scroll_y);
+    let last = layout.line_at(scroll_y + cv.h as f32) + 1;
 
     for l in first..last {
         let line = &layout.lines[l];
-        let y0 = (margin + l as f32 * lh - scroll_y).round() as i32;
-        let y1 = y0 + lh as i32;
+        let y0 = (margin + line.y - scroll_y).round() as i32;
+        let y1 = y0 + line.h as i32;
 
         if let Some((a, b)) = editor.selection() {
             let x = |i: usize| margin + line.xs[i.clamp(line.start, line.end) - line.start];
             // A selected line break is shown as a small extra block at the end of the line.
             let newline =
                 line.end < chars.len() && !layout.is_wrapped(l) && a <= line.end && b > line.end;
-            let x1 = x(b) + if newline { space_w } else { 0.0 };
+            let x1 = x(b) + if newline { fonts.advance(' ', line.style) } else { 0.0 };
             if x1 > x(a) {
                 cv.fill(x(a).round() as i32, y0, x1.round() as i32, y1, SELECTION);
             }
         }
 
-        let base_y = y0 + baseline as i32;
+        let base_y = y0 + fonts.metrics(line.style).1 as i32;
         for (col, &c) in chars[line.start..line.end].iter().enumerate() {
-            if let Some(g) = fonts.glyph(c) {
-                let x = (margin + line.xs[col]).round() as i32 + g.left;
-                cv.blend_glyph(g, x, base_y + g.top, INK);
+            let st = layout.styles[line.start + col];
+            let x0 = (margin + line.xs[col]).round() as i32;
+            if let Some(g) = fonts.glyph(c, st) {
+                cv.blend_glyph(g, x0 + g.left, base_y + g.top, color(st));
+            }
+            if st.strike {
+                let x1 = (margin + line.xs[col + 1]).round() as i32;
+                cv.fill(x0, (y0 + y1) / 2, x1, (y0 + y1) / 2 + s as i32, color(st));
             }
         }
     }
 
     // Caret
     let (l, col) = layout.locate(editor.cursor());
-    let x = (margin + layout.lines[l].xs[col]).round() as i32;
-    let top = (margin + l as f32 * lh - scroll_y).round() as i32;
-    cv.fill(x, top, x + s as i32, top + lh as i32, INK);
+    let line = &layout.lines[l];
+    let x = (margin + line.xs[col]).round() as i32;
+    let top = (margin + line.y - scroll_y).round() as i32;
+    cv.fill(x, top, x + s as i32, top + line.h as i32, INK);
 }
 
 struct Repeat {
@@ -218,8 +243,7 @@ impl App {
         let s = self.scale as f32;
         self.fonts.set_px(FONT_PX * s);
         let max_w = ((self.width as f32 - 2.0 * MARGIN) * s).max(1.0);
-        let fonts = &mut self.fonts;
-        self.layout = Layout::build(self.editor.chars(), max_w, &mut |c| fonts.advance(c));
+        self.layout = Layout::build(self.editor.chars(), max_w, &mut self.fonts);
     }
 
     fn view_height(&self) -> f32 {
@@ -227,14 +251,14 @@ impl App {
     }
 
     fn clamp_scroll(&mut self) {
-        let content = self.layout.lines.len() as f32 * self.fonts.line_height;
-        self.scroll_y = self.scroll_y.clamp(0.0, (content - self.view_height()).max(0.0));
+        let max = (self.layout.height() - self.view_height()).max(0.0);
+        self.scroll_y = self.scroll_y.clamp(0.0, max);
     }
 
     fn ensure_cursor_visible(&mut self) {
-        let lh = self.fonts.line_height;
-        let top = self.layout.locate(self.editor.cursor()).0 as f32 * lh;
-        self.scroll_y = self.scroll_y.min(top).max(top + lh - self.view_height());
+        let line = &self.layout.lines[self.layout.locate(self.editor.cursor()).0];
+        let (top, bottom) = (line.y, line.y + line.h);
+        self.scroll_y = self.scroll_y.min(top).max(bottom - self.view_height());
         self.clamp_scroll();
     }
 
@@ -349,7 +373,7 @@ impl App {
     }
 
     fn page_lines(&self) -> i32 {
-        ((self.view_height() / self.fonts.line_height) as i32 - 1).max(1)
+        ((self.view_height() / self.fonts.metrics(Style::default()).0) as i32 - 1).max(1)
     }
 
     fn handle_key(&mut self, event: &KeyEvent) {
@@ -416,7 +440,7 @@ impl App {
         let s = self.scale as f32;
         let x = (self.mouse.0 as f32 - MARGIN) * s;
         let y = (self.mouse.1 as f32 - MARGIN) * s + self.scroll_y;
-        self.layout.idx_at((y / self.fonts.line_height).floor().max(0.0) as usize, x)
+        self.layout.idx_at(self.layout.line_at(y), x)
     }
 
     fn cursor_moved(&mut self) {
@@ -473,11 +497,11 @@ impl App {
 
         // Tell the input method where the caret is, so its candidate list appears next to it.
         if let Some(text_input) = self.text_input.as_ref().filter(|_| self.ime_active) {
-            let (line, col) = self.layout.locate(self.editor.cursor());
-            let lh = self.fonts.line_height;
-            let x = MARGIN + self.layout.lines[line].xs[col] / s as f32;
-            let y = MARGIN + (line as f32 * lh - self.scroll_y) / s as f32;
-            text_input.set_cursor_rectangle(x as i32, y as i32, 1, (lh / s as f32) as i32);
+            let (l, col) = self.layout.locate(self.editor.cursor());
+            let line = &self.layout.lines[l];
+            let x = MARGIN + line.xs[col] / s as f32;
+            let y = MARGIN + (line.y - self.scroll_y) / s as f32;
+            text_input.set_cursor_rectangle(x as i32, y as i32, 1, (line.h / s as f32) as i32);
             text_input.commit();
         }
 
@@ -692,7 +716,7 @@ impl PointerHandler for App {
                 PointerEventKind::Axis { vertical, .. } => {
                     // Wheel notches scroll three lines each; touchpads give a smooth amount.
                     self.scroll_y += if vertical.discrete != 0 {
-                        vertical.discrete as f32 * 3.0 * self.fonts.line_height
+                        vertical.discrete as f32 * 3.0 * self.fonts.metrics(Style::default()).0
                     } else {
                         vertical.absolute as f32 * self.scale as f32
                     };
@@ -854,7 +878,7 @@ fn main() {
         finished: false,
         path,
         editor,
-        layout: Layout { lines: Vec::new() },
+        layout: Layout::default(),
         fonts,
         scroll_y: 0.0,
         goal_x: None,

@@ -7,7 +7,8 @@ It uses about **4 MB** of ram.
 - Every launch opens a new, empty note.
 - Notes are plain markdown files in `~/.local/share/hyprsticky/`, saved automatically.
 - Works with input methods (fcitx, ibus) and shows Chinese, Japanese and Korean text.
-- Notes are saved as .md (I might make it to render markdown too) 
+- Markdown is styled as you type: headings, bold, italic, strikethrough, code, links, quotes,
+  lists, task lists and tables (monospace). The markers stay visible, dimmed.
 
 ## Install
 
@@ -59,7 +60,7 @@ Notes have no title bar, so move them with `SUPER` + drag. If a keybind can't fi
 
 ## Limitations
 
-No copy and paste yet, and markdown is not rendered.
+No copy and paste yet. Images and links are shown as styled text, not opened or displayed.
 
 ## License
 
