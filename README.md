@@ -2,15 +2,18 @@
 
 Tiny sticky notes for Hyprland, written in Rust. (vibecoded of course)
 
-It uses about **4 MB** of ram. An
+It uses about **4 MB** of ram.
 
 - Every launch opens a new, empty note.
 - Notes are plain markdown files in `~/.local/share/hyprsticky/`, saved automatically.
 - Works with input methods (fcitx, ibus) and shows Chinese, Japanese and Korean text.
+- Notes are saved as .md (I might make it to render markdown too) 
 
 ## Install
 
 ```sh
+git clone https://github.com/10500awa/hyprsticky
+cd hyprsticky
 cargo install --path .
 ```
 
