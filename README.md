@@ -1,10 +1,8 @@
 # hyprsticky
 
-Tiny sticky notes for Hyprland, written in Rust.
+Tiny sticky notes for Hyprland, written in Rust. (vibecoded of course)
 
-It uses about **4.4 MB** of RAM (1.8 MB of it private, measured on the author's machine). An
-earlier egui version of the same app used about 168 MB. There is no GPU, GTK or toolkit: it draws
-on the CPU and talks to Wayland directly.
+It uses about **4 MB** of ram. An
 
 - Every launch opens a new, empty note.
 - Notes are plain markdown files in `~/.local/share/hyprsticky/`, saved automatically.
@@ -32,22 +30,20 @@ Mouse: click, drag to select, double-click for a word, triple-click for a line.
 
 ## Hyprland
 
-Lua config:
-
+Bind:
 ```lua
-hl.window_rule({ name = "hyprsticky", float = true, pin = true, size = "260 260",
-                 match = { class = "hyprsticky" } })
 hl.bind(mod .. " + SHIFT + N", hl.dsp.exec_cmd("hyprsticky"))
 ```
-
-hyprlang config:
-
-```ini
-windowrule = float on, match:class ^(hyprsticky)$
-windowrule = pin on, match:class ^(hyprsticky)$
-windowrule = size 260 260, match:class ^(hyprsticky)$
-bind = SUPER SHIFT, N, exec, hyprsticky
-```
+Window rule:
+```lua
+hl.window_rule({
+name = "hyprsticky",
+float = true,
+pin = true,
+size = "260 260",
+match = { class = "hyprsticky" }
+})
+``` 
 
 Notes have no title bar, so move them with `SUPER` + drag. If a keybind can't find
 `hyprsticky`, use the full path (`~/.cargo/bin/hyprsticky`).
