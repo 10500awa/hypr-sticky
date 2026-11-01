@@ -2,7 +2,7 @@
 
 Tiny sticky notes for Hyprland, written in Rust. (vibecoded of course)
 
-It uses about **4 MB** of ram.
+It uses about **4 MB** of ram just opened an about **50 MB** when a note has more than 1.5 Million characters.
 
 - Every launch opens a new, empty note.
 - Notes are plain markdown files in `~/.local/share/hyprsticky/`, saved automatically.
@@ -61,6 +61,14 @@ Notes have no title bar, so move them with `SUPER` + drag. If a keybind can't fi
 ## Limitations
 
 No copy and paste yet. Images and links are shown as styled text, not opened or displayed.
+
+## Todo
+
+- Copy and paste.
+- Image support??
+- different note color (with an easy to change button).
+- Aur?
+- a command to re-open the last note.
 
 ## License
 
