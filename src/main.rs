@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_registry,
+    delegate_compositor, delegate_keyboard, delegate_output, delegate_pointer, delegate_registry,
+    delegate_seat, delegate_shm, delegate_xdg_shell, delegate_xdg_window,
     output::{OutputHandler, OutputState},
     reexports::{
         calloop::EventLoop,
@@ -27,7 +28,7 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         Capability, SeatHandler, SeatState,
-        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RawModifiers, RepeatInfo},
+        keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers, RepeatInfo},
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
     },
     shell::{
@@ -865,17 +866,6 @@ impl KeyboardHandler for App {
         }
     }
 
-    // Key repeat is done by our own timer (see `tick`), so SCTK's repeat is not used.
-    fn repeat_key(
-        &mut self,
-        _conn: &Connection,
-        _qh: &QueueHandle<Self>,
-        _keyboard: &wl_keyboard::WlKeyboard,
-        _serial: u32,
-        _event: KeyEvent,
-    ) {
-    }
-
     fn release_key(
         &mut self,
         _conn: &Connection,
@@ -900,7 +890,6 @@ impl KeyboardHandler for App {
         _keyboard: &wl_keyboard::WlKeyboard,
         _serial: u32,
         modifiers: Modifiers,
-        _raw_modifiers: RawModifiers,
         _layout: u32,
     ) {
         self.mods = modifiers;
@@ -957,8 +946,9 @@ impl PointerHandler for App {
                     }
                 }
                 PointerEventKind::Axis { vertical, .. } => {
-                    let delta = if vertical.value120 != 0 {
-                        vertical.value120 as f32 / 120.0 * 3.0 * self.fonts.line_height
+                    // Wheel notches scroll three lines each; touchpads give a smooth amount.
+                    let delta = if vertical.discrete != 0 {
+                        vertical.discrete as f32 * 3.0 * self.fonts.line_height
                     } else {
                         vertical.absolute as f32 * self.scale.max(1) as f32
                     };
@@ -1036,7 +1026,14 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for App {
     }
 }
 
-smithay_client_toolkit::delegate_dispatch2!(App);
+delegate_compositor!(App);
+delegate_output!(App);
+delegate_shm!(App);
+delegate_seat!(App);
+delegate_keyboard!(App);
+delegate_pointer!(App);
+delegate_xdg_shell!(App);
+delegate_xdg_window!(App);
 
 fn print_usage() {
     println!(
