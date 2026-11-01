@@ -1,7 +1,9 @@
 //! hyprsticky: minimal sticky notes for Hyprland.
 //!
 //! A plain Wayland client that draws into shared memory with the CPU: no GPU, no toolkit.
-//! That keeps memory use small. Each note is one window and one markdown file.
+//! That keeps memory use small: about 4.4 MB resident (1.8 MB of it private) with a note open,
+//! measured on one machine, against roughly 168 MB for the earlier egui/OpenGL version.
+//! Each note is one window and one markdown file.
 
 mod font;
 mod layout;
